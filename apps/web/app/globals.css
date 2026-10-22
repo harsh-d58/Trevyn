@@ -1,0 +1,230 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Trevyn light glass — see GLASS_DESIGN_LANGUAGE.md.
+   Legend colours are fixed: AI = violet, deterministic = teal, human approval = amber.
+   --brand is the user-changeable interactive accent (registered so accent swaps animate). */
+@property --brand { syntax: "<color>"; inherits: true; initial-value: #2457e6; }
+@property --brand-2 { syntax: "<color>"; inherits: true; initial-value: #7a8cff; }
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-sans);
+  --font-display: var(--font-display);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Trevyn */
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+  --color-ink: var(--ink);
+  --color-navy: var(--navy);
+  --color-ai: var(--ai);
+  --color-det: var(--det);
+  --color-human: var(--human);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-urgent: var(--urgent);
+  --color-high: var(--high);
+  --color-cat-ui: var(--cat-ui);
+  --color-cat-api: var(--cat-api);
+  --color-cat-perf: var(--cat-perf);
+  --color-cat-sec: var(--cat-sec);
+  --color-cat-compat: var(--cat-compat);
+  --ease-out-soft: cubic-bezier(.22, 1, .36, 1);
+}
+
+:root {
+  color-scheme: light;
+  --ink: #0b1a3d; --navy: #0f2557;
+  --ai: #7457ea; --det: #0b8a7c; --human: #d27408;
+  --ok: #15935a; --warn: #b86f05; --bad: #d03636; --urgent: #e5484d; --high: #f08c2e;
+  --cat-ui: #3b6ff5; --cat-api: #38bdf8; --cat-perf: #ff8a5b; --cat-sec: #ec6fb0; --cat-compat: #94a3b8;
+
+  /* wallpaper: Prism (default) — blob hues echo the legend */
+  --wall-base: #eef2fa; --blob-1: #c9c1ff; --blob-2: #c3d8ff; --blob-3: #bfede2; --blob-4: #ffe0c4;
+
+  /* glass tiers */
+  --g1: rgb(255 255 255 / .58); --g2: rgb(255 255 255 / .72); --gi: rgb(255 255 255 / .46);
+  --g-border: rgb(255 255 255 / .78);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / .95), 0 0 0 1px rgb(15 37 87 / .05), 0 10px 30px -14px rgb(15 37 87 / .22);
+  --shadow-float: inset 0 1px 0 #fff, 0 0 0 1px rgb(15 37 87 / .06), 0 18px 44px -16px rgb(15 37 87 / .3);
+
+  /* shadcn semantic tokens mapped onto the glass system */
+  --background: var(--wall-base);
+  --foreground: #0d1a35;
+  --card: var(--g1);
+  --card-foreground: #0d1a35;
+  --popover: rgb(255 255 255 / .9);
+  --popover-foreground: #0d1a35;
+  --primary: var(--brand);
+  --primary-foreground: #fff;
+  --secondary: rgb(255 255 255 / .6);
+  --secondary-foreground: #0d1a35;
+  --muted: rgb(15 37 87 / .05);
+  --muted-foreground: #6b7590;
+  --accent: color-mix(in oklab, var(--brand) 10%, transparent);
+  --accent-foreground: #0d1a35;
+  --destructive: var(--bad);
+  --border: rgb(15 37 87 / .08);
+  --input: rgb(15 37 87 / .1);
+  --ring: var(--brand);
+  --chart-1: var(--det); --chart-2: var(--bad); --chart-3: var(--brand); --chart-4: var(--ai); --chart-5: var(--human);
+  --radius: 0.75rem;
+
+  transition: --brand .45s var(--ease-out-soft), --brand-2 .45s var(--ease-out-soft);
+}
+
+/* preferences — set on <html> by lib/prefs.ts */
+:root[data-wall="mist"] { --wall-base: #eef1f6; --blob-1: #d5deee; --blob-2: #e4e9f3; --blob-3: #d9e3f0; --blob-4: #e6ebf3; }
+:root[data-wall="sage"] { --wall-base: #eef4ef; --blob-1: #cfe8d8; --blob-2: #ddefe5; --blob-3: #e8f1d9; --blob-4: #d7ebdd; }
+:root[data-wall="dawn"] { --wall-base: #f6f1f2; --blob-1: #ffd9c9; --blob-2: #e9d6ff; --blob-3: #ffe9c9; --blob-4: #f7d7e4; }
+:root[data-wall="solid"] { --wall-base: #f4f6fa; --blob-1: transparent; --blob-2: transparent; --blob-3: transparent; --blob-4: transparent; }
+:root[data-accent="indigo"] { --brand: #4f46e5; --brand-2: #8b85ff; }
+:root[data-accent="navy"] { --brand: #0f2557; --brand-2: #4a66b0; }
+:root[data-accent="sky"] { --brand: #0284c7; --brand-2: #5cc4f2; }
+:root[data-accent="rose"] { --brand: #e11d48; --brand-2: #fb7185; }
+:root[data-glass="tinted"] { --g1: rgb(255 255 255 / .74); --g2: rgb(255 255 255 / .84); }
+:root[data-glass="solid"] { --g1: #fff; --g2: #fff; --gi: #f6f8fc; }
+
+@utility wallpaper {
+  background:
+    radial-gradient(45% 55% at 8% 6%, color-mix(in oklab, var(--blob-1) 60%, transparent), transparent 70%),
+    radial-gradient(40% 50% at 96% 4%, color-mix(in oklab, var(--blob-2) 65%, transparent), transparent 70%),
+    radial-gradient(45% 55% at 4% 98%, color-mix(in oklab, var(--blob-3) 55%, transparent), transparent 70%),
+    radial-gradient(40% 50% at 98% 96%, color-mix(in oklab, var(--blob-4) 50%, transparent), transparent 70%),
+    var(--wall-base);
+}
+@utility glass-1 {
+  background: var(--g1);
+  border: 1px solid var(--g-border);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  backdrop-filter: blur(20px) saturate(170%);
+  box-shadow: var(--shadow-card);
+}
+@utility glass-2 {
+  background: var(--g2);
+  border: 1px solid rgb(255 255 255 / .85);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: var(--shadow-float);
+}
+@utility glass-inset {
+  background: var(--gi);
+  border: 1px solid rgb(15 37 87 / .06);
+}
+@utility island {
+  background: rgb(11 26 61 / .88);
+  color: #e8eeff;
+  border: 1px solid rgb(255 255 255 / .08);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 0 18px 44px -16px rgb(11 26 61 / .55);
+}
+@utility hatch {
+  background-image: repeating-linear-gradient(135deg, currentColor 0 2px, transparent 2px 6px);
+}
+@utility glow-brand {
+  box-shadow: 0 8px 24px -6px color-mix(in oklab, var(--brand) 55%, transparent);
+}
+
+:root[data-glass="solid"] .glass-1, :root[data-glass="solid"] .glass-2 { -webkit-backdrop-filter: none; backdrop-filter: none; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --g1: rgb(255 255 255 / .94); --g2: rgb(255 255 255 / .97); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root { --g1: #fff; --g2: #fff; }
+}
+
+/* cursor spotlight + edge light; FxProvider writes --mx/--my on the hovered .spot */
+.spot { position: relative; isolation: isolate; }
+.spot::before, .spot::after {
+  content: ""; position: absolute; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .2s;
+}
+.spot::before {
+  inset: 0; z-index: -1;
+  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), rgb(255 255 255 / .55), transparent 60%);
+}
+.spot::after {
+  inset: -1px; padding: 1px;
+  background: radial-gradient(180px circle at var(--mx, 50%) var(--my, 50%), color-mix(in oklab, var(--brand) 50%, transparent), transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.spot:hover::before, .spot:hover::after { opacity: 1; }
+
+/* press + light pulse; FxProvider appends .pulse-dot on pointerdown */
+.press { transition: transform .12s var(--ease-out-soft); }
+.press:active { transform: scale(.97); }
+.press-icon:active { transform: scale(.92); }
+.pulse { position: relative; overflow: hidden; --pulse: color-mix(in oklab, var(--brand) 24%, transparent); }
+.pulse-on-dark { --pulse: rgb(255 255 255 / .45); }
+.pulse-dot {
+  position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 9999px; pointer-events: none;
+  background: var(--pulse); animation: pulse-out .52s var(--ease-out-soft) forwards;
+}
+@keyframes pulse-out { from { transform: scale(0); opacity: 1; } to { transform: scale(8); opacity: 0; } }
+
+/* FlowMap edges: animated dashes (prototype .flow) */
+@keyframes dash { to { stroke-dashoffset: -24; } }
+.flow { animation: dash 1.1s linear infinite; }
+/* policy refusal */
+@keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 50% { transform: translateX(6px); } 75% { transform: translateX(-3px); } }
+.shake { animation: shake .32s ease-in-out; }
+@keyframes slidein { from { opacity: 0; transform: translateY(4px); } }
+@keyframes drift { from { transform: translate3d(-12px, -8px, 0) scale(1.04); } to { transform: translate3d(12px, 10px, 0) scale(1.04); } }
+@keyframes prism-drift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+@keyframes live-ping { 0% { transform: scale(1); opacity: .7; } 80%, 100% { transform: scale(2.4); opacity: 0; } }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.live-dot { position: relative; }
+.live-dot::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit; animation: live-ping 1.6s ease-out infinite; }
+.shimmer-text {
+  background: linear-gradient(90deg, #b9a8ff 0%, #fff 50%, #b9a8ff 100%) 0 0 / 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { @apply font-sans; }
+  body { @apply text-foreground antialiased; background: var(--wall-base); }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
