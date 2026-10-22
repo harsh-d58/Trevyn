@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "Assertion": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "ui_text",
+            "url",
+            "count",
+            "network_posts",
+            "db_row_count",
+            "status"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "op": {
+          "enum": [
+            "eq",
+            "lte",
+            "gte",
+            "contains",
+            "matches"
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Expected"
+        }
+      },
+      "required": [
+        "kind",
+        "subject",
+        "op",
+        "expected"
+      ],
+      "title": "Assertion",
+      "type": "object"
+    },
+    "Step": {
+      "properties": {
+        "action": {
+          "enum": [
+            "goto",
+            "click",
+            "dblclick",
+            "fill",
+            "select",
+            "press",
+            "wait_for",
+            "reset"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "Step",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "test_case_id": {
+      "title": "Test Case Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "requirement_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requirement Ref"
+    },
+    "preconditions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Preconditions",
+      "type": "array"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/Step"
+      },
+      "maxItems": 40,
+      "minItems": 1,
+      "title": "Steps",
+      "type": "array"
+    },
+    "expected_result": {
+      "title": "Expected Result",
+      "type": "string"
+    },
+    "assertions": {
+      "items": {
+        "$ref": "#/$defs/Assertion"
+      },
+      "minItems": 1,
+      "title": "Assertions",
+      "type": "array"
+    },
+    "side_effects": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Side Effects",
+      "type": "array"
+    },
+    "risk": {
+      "default": "low",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Risk",
+      "type": "string"
+    },
+    "timeout_budget_s": {
+      "default": 90,
+      "maximum": 600,
+      "title": "Timeout Budget S",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "test_case_id",
+    "title",
+    "steps",
+    "expected_result",
+    "assertions"
+  ],
+  "title": "TestCase",
+  "type": "object"
+}

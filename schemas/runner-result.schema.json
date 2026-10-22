@@ -1,0 +1,290 @@
+{
+  "$defs": {
+    "AssertionResult": {
+      "properties": {
+        "i": {
+          "title": "I",
+          "type": "integer"
+        },
+        "evaluated": {
+          "title": "Evaluated",
+          "type": "boolean"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected"
+        },
+        "message": {
+          "default": "",
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "i",
+        "evaluated",
+        "ok"
+      ],
+      "title": "AssertionResult",
+      "type": "object"
+    },
+    "CaseResult": {
+      "properties": {
+        "test_case_id": {
+          "title": "Test Case Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "errored",
+            "skipped"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "steps": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StepResult"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "assertions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AssertionResult"
+          },
+          "title": "Assertions",
+          "type": "array"
+        },
+        "requests": {
+          "default": 0,
+          "title": "Requests",
+          "type": "integer"
+        },
+        "failed_requests": {
+          "default": 0,
+          "title": "Failed Requests",
+          "type": "integer"
+        },
+        "dup_posts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DupPost"
+          },
+          "title": "Dup Posts",
+          "type": "array"
+        },
+        "egress_blocked": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Egress Blocked",
+          "type": "array"
+        },
+        "console_errors": {
+          "default": 0,
+          "title": "Console Errors",
+          "type": "integer"
+        },
+        "console_warnings": {
+          "default": 0,
+          "title": "Console Warnings",
+          "type": "integer"
+        },
+        "artefacts": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "title": "Artefacts",
+          "type": "object"
+        }
+      },
+      "required": [
+        "test_case_id",
+        "outcome"
+      ],
+      "title": "CaseResult",
+      "type": "object"
+    },
+    "DupPost": {
+      "properties": {
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "ms_apart": {
+          "title": "Ms Apart",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "url",
+        "count",
+        "ms_apart"
+      ],
+      "title": "DupPost",
+      "type": "object"
+    },
+    "StepResult": {
+      "properties": {
+        "i": {
+          "title": "I",
+          "type": "integer"
+        },
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "t_ms": {
+          "title": "T Ms",
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "screenshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot"
+        }
+      },
+      "required": [
+        "i",
+        "action",
+        "ok",
+        "t_ms"
+      ],
+      "title": "StepResult",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "infra_error",
+        "timeout",
+        "cancelled"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "cases": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CaseResult"
+      },
+      "title": "Cases",
+      "type": "array"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "runner_version": {
+      "default": "trevyn-runner-py@0.1.0",
+      "title": "Runner Version",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
+    },
+    "ended_at": {
+      "default": "",
+      "title": "Ended At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id",
+    "status"
+  ],
+  "title": "RunnerResult",
+  "type": "object"
+}

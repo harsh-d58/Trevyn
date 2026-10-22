@@ -1,6 +1,7 @@
 "use client"
 // Test runs ledger (PORTING_PLAN.md P1.4, from trevyn-app Runs.jsx Runs + Overview RunsTable).
 // Reads runs from the live store; honours ?run=, ?suite= and ?date= links from the Overview.
+import { apiEnabled } from "@/lib/api"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { CirclePlay, Plus, X } from "lucide-react"
@@ -53,7 +54,7 @@ export function RunsView({ ledger, filters = {} }: { ledger: Ledger; filters?: F
         )}>
         <DataTable head={["Run", "Status", "Pass / fail", "Duration", "Trigger", "Started"]} minWidth={760}>
           {rows.map((r) => {
-            const href = r.status === "running" ? "/runs/live" : "/findings/DEF-142"
+            const href = apiEnabled ? `/runs/live?run=${r.id}` : r.status === "running" ? "/runs/live" : "/findings/DEF-142"
             return (
               <Row key={r.id} onClick={() => router.push(href)} highlight={filters.run === r.id}>
                 <Cell>

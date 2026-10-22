@@ -60,12 +60,13 @@ Trevyn is an AI QA engineer that plans tests from your requirements and runs the
 | Part | Status |
 |---|---|
 | Web dashboard (`apps/web`): 23 desktop routes, light-glass design system, live-run view, findings board, repair loop | ✅ Built (runs on **demo data**) |
-| FastAPI control plane, PostgreSQL, Redis/Celery | ⏳ Planned |
-| LangGraph orchestrator + model adapter (Claude by default) | ⏳ Planned |
-| Playwright / k6 / ZAP / Semgrep / OSV runners | ⏳ Planned |
-| Planted-bug demo shop + benchmark harness | ⏳ Planned |
+| FastAPI control plane (`services/api`): projects, plans, runs, SSE events, findings, evidence, approvals, policy gate, copilot chat | ✅ Phase 1 core (SQLite locally, Postgres/Supabase via `DATABASE_URL`) |
+| Orchestrator (`workers/orchestrator`): state machine, Claude adapter, planner + validator + template fallback, verifier V1–V7, diagnosis, repair prompt | ✅ Phase 1 core (in-process; Celery/LangGraph later) |
+| Playwright runner (`workers/playwright-runner`): step interpreter, traces, screenshots, network log, duplicate-POST detection, egress guard | ✅ Python runner (TS/Docker sandbox later) |
+| Planted-bug demo shop (`scenarios/demo-shop`): B1–B6, B8, B10, B11 canary, test hooks | ✅ Built |
+| Redis/Celery, LangGraph, k6 / ZAP / Semgrep / OSV runners, auth, benchmark harness, dashboard wiring | ⏳ Planned |
 
-The dashboard is currently backed by fixtures and a simulated event stream. The full backend plan, with milestones and a definition of done, is in **[BACKEND_AND_REMAINING_WORK.md](BACKEND_AND_REMAINING_WORK.md)**.
+The dashboard is still backed by fixtures; the core API it will call now runs end to end (`tests/e2e_golden_path.py` finds B1 as `confirmed`, reproduced 2/2, with evidence). The full plan is in **[BACKEND_AND_REMAINING_WORK.md](BACKEND_AND_REMAINING_WORK.md)**.
 
 ---
 
@@ -140,6 +141,29 @@ Optional route checks, run from `apps/web` against a running dev server (needs P
 python scripts/sweep_routes.py      # visit every route, check for errors and broken links
 python scripts/e2e_demo_path.py     # scripted demo path
 ```
+
+---
+
+## Getting started (core)
+
+**Requirements:** Python 3.12+ and [uv](https://docs.astral.sh/uv/). Everything else is optional.
+
+```bash
+cp .env.example .env                 # optional: DATABASE_URL (Supabase), ANTHROPIC_API_KEY
+uv sync
+uv run playwright install chromium
+uv run uvicorn demo_shop.app:app --port 3100       # terminal 1: planted-bug shop (BUGS=all)
+uv run uvicorn trevyn_api.main:app --port 8000     # terminal 2: control plane, docs at /docs
+uv run python tests/e2e_golden_path.py             # terminal 3: plan → approve → run → B1 confirmed
+cd apps/web && copy .env.example .env.local && npm run dev   # dashboard on live API data (http://localhost:3000)
+```
+
+The dashboard shows a **Live API data** / **Demo data** chip (bottom left). With the API up it reads real runs, findings and approvals; New run launches a real run and streams it at `/runs/live?run=RUN-xxxx`; finding pages show real evidence; **Ask Trevyn** opens the copilot. KPI charts and the quality pages are still demo data. Leave `NEXT_PUBLIC_API_URL` empty for demo-only mode.
+
+- **No `DATABASE_URL`:** local SQLite at `var/trevyn.db`. **Supabase:** use the pooler connection string (port 5432 session mode, or 6543 transaction mode). Tables and append-only triggers are created on startup.
+- **No `ANTHROPIC_API_KEY`:** the planner uses template plans and diagnosis uses deterministic rules; the copilot (`POST /api/assistant/chat`) returns 503. With a key, planning, diagnosis, repair prompts and chat use Claude (`claude-opus-5-5`, adaptive thinking).
+- **Fix a planted bug:** restart the shop with that flag removed, e.g. `BUGS=email_validation,user_enum uv run uvicorn demo_shop.app:app --port 3100` fixes B1.
+- `uv run python -m trevyn_contracts` exports the JSON Schemas to `schemas/`.
 
 ---
 

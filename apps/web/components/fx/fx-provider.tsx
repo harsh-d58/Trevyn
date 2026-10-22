@@ -14,7 +14,8 @@ export function FxProvider() {
       frame = requestAnimationFrame(() => {
         frame = 0
         const el = (last?.target as Element | null)?.closest?.<HTMLElement>(".spot")
-        if (!el || !last) return
+        // skip server HTML React hasn't hydrated yet (streamed under Suspense), or hydration sees an inline style it didn't render
+        if (!el || !last || !Object.keys(el).some((k) => k.startsWith("__reactFiber"))) return
         const r = el.getBoundingClientRect()
         el.style.setProperty("--mx", `${last.clientX - r.left}px`)
         el.style.setProperty("--my", `${last.clientY - r.top}px`)

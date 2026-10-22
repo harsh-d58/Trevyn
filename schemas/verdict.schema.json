@@ -1,0 +1,80 @@
+{
+  "properties": {
+    "status": {
+      "enum": [
+        "confirmed",
+        "needs_review",
+        "inconclusive",
+        "passed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "rule": {
+      "title": "Rule",
+      "type": "string"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "reproduced": {
+      "default": "1/1",
+      "title": "Reproduced",
+      "type": "string"
+    },
+    "checks": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "default": {},
+      "title": "Checks",
+      "type": "object"
+    },
+    "explanation": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Explanation"
+    },
+    "explanation_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Explanation By"
+    }
+  },
+  "required": [
+    "status",
+    "rule"
+  ],
+  "title": "Verdict",
+  "type": "object"
+}

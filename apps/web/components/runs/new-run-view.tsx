@@ -19,6 +19,7 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ATTACHMENTS, MODES, SUITES, WIZARD_DEFAULTS, WIZARD_STEPS, WIZARD_SUBS, type Env, type RunConfig } from "@/lib/demo/runs"
+import { api, apiEnabled } from "@/lib/api"
 import { useLiveStore } from "@/lib/live"
 import { notify } from "@/lib/notify"
 import { cn } from "@/lib/utils"
@@ -55,7 +56,22 @@ export function NewRunView() {
   const prod = w.env === "prod"
   const suites = SUITES.filter((s) => w.suites[s.key])
 
-  const launch = () => {
+  const [launching, setLaunching] = useState(false)
+  const launch = async () => {
+    if (apiEnabled) { // real path: plan (AI or template) → approve → run → stream it
+      if (prod) { notify("Blocked by policy: production targets are not allowed.", "bad"); setShake((n) => n + 1); return }
+      setLaunching(true)
+      try {
+        const { items } = await api<{ items: { id: string }[] }>("/api/projects")
+        notify("Generating the test plan…", "ok")
+        const plan = await api<{ id: string; test_cases: unknown[]; source: string }>(`/api/projects/${items[0].id}/plans`, { json: { requirement: w.req, mode: `${w.mode}_box` } })
+        await api(`/api/plans/${plan.id}/approve`, { method: "POST" })
+        const run = await api<{ id: string }>("/api/runs", { json: { plan_id: plan.id, name: w.name }, idem: crypto.randomUUID() })
+        notify(`Run ${run.id} queued · ${plan.test_cases.length} tests (${plan.source} plan). Policy gate passed.`)
+        router.push(`/runs/live?run=${run.id}`)
+      } catch (e) { notify((e as Error).message, "bad"); setShake((n) => n + 1) } finally { setLaunching(false) }
+      return
+    }
     const res = store.launchRun({ name: w.name, env: w.env })
     if (!res.ok) { notify(res.reason!, "bad"); setShake((n) => n + 1); return }
     notify(`Run ${res.id} queued. Policy gate passed.`)
@@ -154,7 +170,7 @@ export function NewRunView() {
               <Button variant="glass" size="pill" onClick={() => notify("Draft saved")}>Save draft</Button>
               {step < 4
                 ? <Button variant="brand" size="pill" onClick={() => setStep(step + 1)}>Continue<ArrowRight /></Button>
-                : <Button key={shake} variant="brand" size="pill" className={cn(shake > 0 && "shake")} onClick={launch}><CirclePlay />Launch run</Button>}
+                : <Button key={shake} variant="brand" size="pill" className={cn(shake > 0 && "shake")} onClick={launch} disabled={launching}><CirclePlay />{launching ? "Launching…" : "Launch run"}</Button>}
             </div>
           </div>
         </Card>

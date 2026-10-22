@@ -1,0 +1,117 @@
+"""Provider-agnostic model adapter (Part 8.3/8.4). Anthropic is the default implementation.
+The LLM proposes; deterministic code decides. Every call returns usage for the model_calls table."""
+from __future__ import annotations
+
+import os
+import time
+from collections.abc import AsyncIterator
+from typing import TypeVar
+
+import anthropic
+from pydantic import BaseModel
+
+T = TypeVar("T", bound=BaseModel)
+
+ROUTING = {
+    "planner": os.getenv("MODEL_PLANNER", "claude-opus-5-5"),
+    "diagnostician": os.getenv("MODEL_DIAGNOSTICIAN", "claude-opus-5-5"),
+    "fix": os.getenv("MODEL_FIX", "claude-opus-5-5"),
+    "assistant": os.getenv("MODEL_ASSISTANT", "claude-opus-5-5"),
+}
+PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}  # $/MTok, 2026-10
+
+
+class ModelUnavailable(Exception):
+    pass
+
+
+class ModelRefused(Exception):
+    pass
+
+
+class Usage(BaseModel):
+    node: str
+    provider: str = "anthropic"
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    latency_ms: int = 0
+    stop_reason: str | None = None
+    cost_usd: float = 0.0
+
+
+def _usage(node: str, model: str, msg, t0: float) -> Usage:
+    u = msg.usage
+    pin, pout = PRICES.get(model, (0, 0))
+    cost = (u.input_tokens * pin + u.output_tokens * pout + (u.cache_read_input_tokens or 0) * pin * 0.1
+            + (u.cache_creation_input_tokens or 0) * pin * 1.25) / 1e6
+    return Usage(node=node, model=model, input_tokens=u.input_tokens, output_tokens=u.output_tokens,
+                 cache_read_tokens=u.cache_read_input_tokens or 0, cache_write_tokens=u.cache_creation_input_tokens or 0,
+                 latency_ms=int((time.monotonic() - t0) * 1000), stop_reason=msg.stop_reason, cost_usd=round(cost, 5))
+
+
+def observed(source: str, text: str) -> str:
+    """Wrap untrusted app/repo content (Part 8.6). Closing tags inside are escaped."""
+    return f'<observed_content source="{source}">\n{text.replace("</observed_content", "&lt;/observed_content")}\n</observed_content>'
+
+
+class AnthropicAdapter:
+    def __init__(self) -> None:
+        has_creds = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        self.client = anthropic.AsyncAnthropic(max_retries=3) if has_creds else None
+
+    @property
+    def available(self) -> bool:
+        return self.client is not None
+
+    @staticmethod
+    def _system(system: str, stable: list[str]) -> list[dict]:
+        blocks = [{"type": "text", "text": system}] + [{"type": "text", "text": s} for s in stable]
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}  # stable prefix cached; volatile context goes in messages
+        return blocks
+
+    async def structured(self, *, node: str, system: str, stable: list[str], prompt: str, schema: type[T],
+                         effort: str = "high") -> tuple[T, Usage]:
+        if not self.client:
+            raise ModelUnavailable("no Anthropic credentials")
+        model, t0 = ROUTING[node], time.monotonic()
+        try:
+            resp = await self.client.messages.parse(
+                model=model, max_tokens=16000, thinking={"type": "adaptive"}, output_config={"effort": effort},
+                system=self._system(system, stable), messages=[{"role": "user", "content": prompt}], output_format=schema)
+        except (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.APIStatusError) as e:
+            raise ModelUnavailable(f"{type(e).__name__}: {e}") from e
+        if resp.stop_reason == "refusal":
+            raise ModelRefused(str(getattr(resp, "stop_details", "")))
+        if resp.stop_reason == "max_tokens" or resp.parsed_output is None:
+            raise ModelUnavailable("output truncated or unparsable")
+        return resp.parsed_output, _usage(node, model, resp, t0)
+
+    async def stream_text(self, *, node: str, system: str, stable: list[str], messages: list[dict],
+                          effort: str = "medium", usage_out: list | None = None) -> AsyncIterator[str]:
+        """Streams text. Server-side refusal fallbacks are on (beta server-side-fallback-2026-07-01, fallbacks="default")."""
+        if not self.client:
+            raise ModelUnavailable("no Anthropic credentials")
+        model, t0 = ROUTING[node], time.monotonic()
+        async with self.client.beta.messages.stream(
+            model=model, max_tokens=64000, thinking={"type": "adaptive"}, output_config={"effort": effort},
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+            system=self._system(system, stable), messages=messages,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text
+            msg = await stream.get_final_message()
+        if usage_out is not None:
+            usage_out.append(_usage(node, model, msg, t0))
+        if msg.stop_reason == "refusal":
+            yield "\n\n[The model declined this request.]"
+
+    async def text(self, **kw) -> tuple[str, Usage]:
+        usage: list[Usage] = []
+        out = "".join([t async for t in self.stream_text(usage_out=usage, **kw)])
+        return out, usage[0]
+
+
+adapter = AnthropicAdapter()

@@ -283,7 +283,7 @@ const LiveContext = createContext<LiveStore | null>(null)
 
 export function LiveProvider({ initial, children }: { initial: Workspace; children: React.ReactNode }) {
   const [store] = useState(() => createLiveStore(initial))
-  useDemoStream(store)
+  useDemoStream(store, initial.source !== "live") // live API: real runs stream per run via SSE (components/runs/real-run-view)
   return <LiveContext.Provider value={store}>{children}</LiveContext.Provider>
 }
 
@@ -299,8 +299,9 @@ export function useLive<T>(select: (s: LiveState) => T): T {
   return useSyncExternalStore(store.subscribe, () => select(store.get()), () => select(store.get()))
 }
 
-function useDemoStream(store: LiveStore) {
+function useDemoStream(store: LiveStore, enabled: boolean) {
   useEffect(() => {
+    if (!enabled) return
     store.boot()
     let ticks = 0
     const id = setInterval(() => {
@@ -309,5 +310,5 @@ function useDemoStream(store: LiveStore) {
       if (++ticks % 3 === 0) store.step()
     }, 320)
     return () => clearInterval(id)
-  }, [store])
+  }, [store, enabled])
 }

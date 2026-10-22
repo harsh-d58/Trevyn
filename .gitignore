@@ -68,3 +68,6 @@ desktop.ini
 !.vscode/extensions.json
 *.swp
 .claude/
+
+# Trevyn core runtime data (SQLite, evidence, demo shop DB)
+var/

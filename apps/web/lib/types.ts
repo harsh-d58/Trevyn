@@ -85,4 +85,4 @@ export type DashboardSummary = {
 }
 
 /** everything the live store is seeded with (one request in production) */
-export type Workspace = { summary: DashboardSummary; findings: Finding[]; runs: RunSummary[]; approvals: Approval[] }
+export type Workspace = { summary: DashboardSummary; findings: Finding[]; runs: RunSummary[]; approvals: Approval[]; source?: "live" | "demo" }

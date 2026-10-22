@@ -15,9 +15,9 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   return SUMMARY
 }
 
-/** Seeds the live store: GET /api/projects/{id}/findings, /api/runs?project=, /api/approvals */
+/** Demo seed for the live store. Live API data comes from lib/live-data.ts (server only). */
 export async function getWorkspace(): Promise<Workspace> {
-  return { summary: SUMMARY, findings: FINDINGS, runs: RUNS, approvals: APPROVALS }
+  return { summary: SUMMARY, findings: FINDINGS, runs: RUNS, approvals: APPROVALS, source: "demo" }
 }
 
 /** GET /api/runs (ledger extras: KPIs and phase timeline) */

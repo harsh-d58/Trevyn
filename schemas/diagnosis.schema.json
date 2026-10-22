@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "Hypothesis": {
+      "properties": {
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "supporting_evidence_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Supporting Evidence Ids",
+          "type": "array"
+        },
+        "confidence": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "confidence"
+      ],
+      "title": "Hypothesis",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "hypotheses": {
+      "items": {
+        "$ref": "#/$defs/Hypothesis"
+      },
+      "title": "Hypotheses",
+      "type": "array"
+    },
+    "verified_observations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Verified Observations",
+      "type": "array"
+    },
+    "unknowns": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Unknowns",
+      "type": "array"
+    }
+  },
+  "required": [
+    "hypotheses"
+  ],
+  "title": "Diagnosis",
+  "type": "object"
+}
