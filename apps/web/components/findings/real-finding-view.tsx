@@ -4,6 +4,7 @@ import { Card } from "@/components/kit/card"
 import { PageHeader } from "@/components/kit/page-header"
 import { Pill, Severity } from "@/components/kit/pills"
 import { API_URL, type ApiFindingDetail } from "@/lib/api"
+import { RepairPanel } from "./repair-panel"
 
 const STATUS_TONE = { confirmed: "bad", needs_review: "warn", inconclusive: "mut" } as const
 
@@ -55,6 +56,7 @@ export function RealFindingView({ f }: { f: ApiFindingDetail }) {
             <Card title="Repair prompt" caption="Paste into your coding tool">
               <pre className="glass-inset max-h-80 overflow-auto rounded-lg p-3 font-mono text-[12px] whitespace-pre-wrap">{f.repair_prompt}</pre>
             </Card>)}
+          <RepairPanel findingId={f.id} confirmed={f.status === "confirmed"} />
         </div>
       </div>
     </div>

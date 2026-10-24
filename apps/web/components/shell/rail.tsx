@@ -9,7 +9,9 @@ import { Suspense, useState } from "react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { RAIL_MAIN, RAIL_UTILITY, activeHref, isGroup, type NavGroup, type NavItem } from "@/lib/nav"
 import { useLive } from "@/lib/live"
+import { authEnabled } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
+import { UserMenu } from "./user-menu"
 
 const HREFS = [...RAIL_MAIN.flatMap((x) => (isGroup(x) ? x.items : [x])), ...RAIL_UTILITY].map((x) => x.href)
 
@@ -124,10 +126,7 @@ function RailView({ path }: { path: string | null }) {
       </div>
       <div className="glass-2 mt-auto flex flex-col items-center gap-1 rounded-full p-2">
         {RAIL_UTILITY.map((x) => <RailLink key={x.href} item={x} current={current} />)}
-        <span tabIndex={0} className="group relative mt-1 rounded-full outline-none">
-          <span className="grid size-9 place-items-center rounded-full bg-[hsl(222_70%_90%)] text-[11px] font-semibold text-[hsl(222_60%_32%)] ring-2 ring-white">AC</span>
-          <HoverLabel label="Alex Chen" hint="QA engineer" accent="hsl(222 70% 60%)" />
-        </span>
+        <span className="mt-1"><UserMenu><HoverLabel label={authEnabled ? "Account" : "Local dev"} hint={authEnabled ? "Profile · sign out" : "Sign-in off"} accent="hsl(222 70% 60%)" /></UserMenu></span>
       </div>
     </nav>
   )

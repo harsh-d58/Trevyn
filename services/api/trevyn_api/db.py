@@ -66,6 +66,7 @@ class Plan(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     environment_id: Mapped[str] = mapped_column(ForeignKey("environments.id"))
     version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_plan_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="candidate")  # candidate|approved|rejected|superseded
     requirement: Mapped[str] = mapped_column(Text)
     test_mode: Mapped[str] = mapped_column(String(20), default="black_box")
@@ -89,6 +90,7 @@ class Run(Base):
     trigger: Mapped[str] = mapped_column(String(20), default="manual")
     parent_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     counts: Mapped[dict] = mapped_column(default=dict)  # passed/failed/inconclusive/total
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -201,18 +203,65 @@ class AuditLog(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class Repair(Base):
+    __tablename__ = "repairs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    display_id: Mapped[str] = mapped_column(String(20))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    finding_id: Mapped[str] = mapped_column(ForeignKey("findings.id"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(String(20))  # demo_flag | diff
+    prompt: Mapped[str] = mapped_column(Text)
+    patch: Mapped[dict] = mapped_column(default=dict)
+    guard: Mapped[dict] = mapped_column(default=dict)
+    approval_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    requested_by: Mapped[str] = mapped_column(String(100), default="dev")
+    regression_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(20), default="pending")  # pending|approved|rejected|verified|failed|escalated
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class RegressionResult(Base):
+    __tablename__ = "regression_results"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    regression_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    test_case_id: Mapped[str] = mapped_column(String(50))
+    baseline_outcome: Mapped[str] = mapped_column(String(20))
+    rerun_outcome: Mapped[str] = mapped_column(String(20))
+    change: Mapped[str] = mapped_column(String(20))  # fixed|still_failing|new_failure|unchanged_pass|inconclusive
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    auth_sub: Mapped[str] = mapped_column(String(100), unique=True)
+    email: Mapped[str] = mapped_column(String(200), default="")
+    name: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(20), default="viewer")  # viewer|engineer|qa_lead|owner
+    is_approver: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 APPEND_ONLY = ("run_events", "audit_log", "policy_decisions")
 
 
 async def init_db() -> None:
+    """SQLite (local dev): create tables directly. Postgres/Supabase: schema comes only from Alembic migrations
+    (`uv run alembic upgrade head`); the API refuses to start against an unmigrated database."""
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        if conn.dialect.name == "postgresql":
-            await conn.execute(text("""CREATE OR REPLACE FUNCTION forbid_mutation() RETURNS trigger AS $$
-                BEGIN RAISE EXCEPTION '% is append-only', TG_TABLE_NAME; END $$ LANGUAGE plpgsql"""))
-            for t in APPEND_ONLY:
-                await conn.execute(text(f"DROP TRIGGER IF EXISTS {t}_ro ON {t}"))
-                await conn.execute(text(f"CREATE TRIGGER {t}_ro BEFORE UPDATE OR DELETE ON {t} FOR EACH ROW EXECUTE FUNCTION forbid_mutation()"))
+        if conn.dialect.name == "sqlite":
+            await conn.run_sync(Base.metadata.create_all)
+            return
+        has = await conn.scalar(text("SELECT to_regclass('public.alembic_version') IS NOT NULL"))
+        if not has:
+            raise RuntimeError("Database not migrated. Run: uv run alembic upgrade head")
 
 
 async def session() -> AsyncSession:  # FastAPI dependency

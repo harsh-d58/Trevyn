@@ -1,5 +1,7 @@
 // Typed fetch wrapper for services/api (BACKEND_AND_REMAINING_WORK.md Part 16).
 // NEXT_PUBLIC_API_URL unset, or NEXT_PUBLIC_DEMO_MODE=1, keeps the dashboard on demo fixtures.
+import { accessToken } from "./supabase"
+
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "")
 export const apiEnabled = !!API_URL && process.env.NEXT_PUBLIC_DEMO_MODE !== "1"
 
@@ -16,10 +18,11 @@ const FRIENDLY: Record<string, string> = {
 
 export async function api<T>(path: string, init: RequestInit & { idem?: string; json?: unknown } = {}): Promise<T> {
   const { idem, json, headers, ...rest } = init
+  const token = typeof window === "undefined" ? null : await accessToken() // client calls carry the Supabase session
   const res = await fetch(API_URL + path, {
     cache: "no-store", ...rest,
     method: rest.method ?? (json === undefined ? "GET" : "POST"),
-    headers: { ...(json !== undefined && { "content-type": "application/json" }), ...(idem && { "Idempotency-Key": idem }), ...headers },
+    headers: { ...(json !== undefined && { "content-type": "application/json" }), ...(idem && { "Idempotency-Key": idem }), ...(token && { Authorization: `Bearer ${token}` }), ...headers },
     body: json === undefined ? rest.body : JSON.stringify(json),
   })
   if (!res.ok) {

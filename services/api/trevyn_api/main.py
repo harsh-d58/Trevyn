@@ -17,17 +17,17 @@ from urllib.parse import urlparse  # noqa: E402
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 from sse_starlette.sse import EventSourceResponse  # noqa: E402
 
-from trevyn_contracts import Target, TestCase  # noqa: E402
 from trevyn_orch import planner  # noqa: E402
 from trevyn_orch.models import ModelUnavailable, adapter, observed  # noqa: E402
 
-from . import policy, runs  # noqa: E402
+from . import auth, insights, integrations, manifest, plans_ext, policy, repairs, runs, storage, targets  # noqa: E402
+from .common import Problem, get_or_404  # noqa: E402
 from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run,  # noqa: E402
                  RunEvent, Session, init_db, now, session)
 
@@ -50,18 +50,14 @@ async def seed() -> None:
 async def lifespan(_: FastAPI):
     await init_db()
     await seed()
+    if not runs.redis_url():  # in-process mode: anything unfinished died with the previous process
+        await runs.reap_stale(orphaned=True)
     yield
 
 
-app = FastAPI(title="Trevyn API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Trevyn API", version="0.1.0", lifespan=lifespan, dependencies=[Depends(auth.authorize)])
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-
-class Problem(HTTPException):
-    def __init__(self, status: int, type_: str, detail: str):
-        super().__init__(status, detail)
-        self.type_ = type_
 
 
 @app.exception_handler(HTTPException)
@@ -69,15 +65,6 @@ async def problem(_: Request, exc: HTTPException):  # RFC 9457 problem+json (Par
     t = getattr(exc, "type_", {404: "not_found", 409: "conflict", 422: "validation_error"}.get(exc.status_code, "error"))
     return JSONResponse({"type": t, "title": t.replace("_", " "), "status": exc.status_code, "detail": exc.detail},
                         status_code=exc.status_code, media_type="application/problem+json")
-
-
-async def get_or_404(s: AsyncSession, model, key: str, by_display: bool = False):
-    obj = await s.scalar(select(model).where(model.display_id == key)) if by_display else await s.get(model, key)
-    if not obj and not by_display and hasattr(model, "display_id"):
-        obj = await s.scalar(select(model).where(model.display_id == key))
-    if not obj:
-        raise Problem(404, "not_found", f"{model.__name__} {key} not found")
-    return obj
 
 
 # ---------- ops ----------
@@ -118,6 +105,8 @@ async def list_projects(s: AsyncSession = Depends(session)):
 async def create_project(body: ProjectIn, s: AsyncSession = Depends(session)):
     if not body.authorised:
         raise Problem(422, "validation_error", "Confirm you own or are authorised to test this target")
+    if err := targets.check_url(body.base_url):
+        raise Problem(422, "target_blocked", err)
     host = (urlparse(body.base_url).hostname or "").lower()
     domains = sorted({host, *[d.lower() for d in body.allowed_domains]})
     p = Project(name=body.name, allowed_domains=domains)
@@ -196,17 +185,24 @@ def run_json(r: Run) -> dict:
 
 @app.post("/api/runs", status_code=201)
 async def start_run(body: RunIn, s: AsyncSession = Depends(session), idempotency_key: str | None = Header(None)):
-    plan = await get_or_404(s, Plan, body.plan_id)
+    return run_json(await create_run(s, await get_or_404(s, Plan, body.plan_id), body.name, idempotency_key))
+
+
+async def create_run(s: AsyncSession, plan: Plan, name: str | None = None, idempotency_key: str | None = None,
+                     trigger: str = "manual", actor: str = "user") -> Run:
+    """Policy-checked run creation shared by POST /api/runs and the CI webhook."""
     if plan.status != "approved":
         raise Problem(409, "conflict", "Approve the plan before running it")
     if idempotency_key and (prev := await s.scalar(select(Run).where(Run.project_id == plan.project_id,
                                                                      Run.idempotency_key == idempotency_key))):
-        return run_json(prev)
+        return prev
     proj, env = await s.get(Project, plan.project_id), await s.get(Environment, plan.environment_id)
+    if not env.local_runner and (err := targets.check_url(env.base_url)):
+        raise Problem(403, "target_blocked", err)
     inp = policy.run_input(proj, env, plan.test_cases)
     dec = await policy.decide(inp)
     run = Run(display_id=await runs.next_display(Run, proj.id, "RUN", 2481), project_id=proj.id, plan_id=plan.id,
-              environment_id=env.id, name=body.name or plan.requirement[:80], idempotency_key=idempotency_key,
+              environment_id=env.id, name=name or plan.requirement[:80], idempotency_key=idempotency_key, trigger=trigger,
               counts={"total": len(plan.test_cases)})
     s.add(run)
     await s.flush()
@@ -219,11 +215,9 @@ async def start_run(body: RunIn, s: AsyncSession = Depends(session), idempotency
         raise Problem(403, "target_blocked" if any("allowlist" in r for r in dec["reasons"]) else "policy_denied",
                       "; ".join(dec["reasons"]))
     await s.commit()
-    await runs.audit("user", "run.start", "run", run.id, obligations=dec["obligations"])
-    target = Target(base_url=env.base_url, allowed_hosts=proj.allowed_domains, hook_url=env.hook_url if env.local_runner else None,
-                    hook_token=os.getenv("TREVYN_HOOK_TOKEN") or None)
-    asyncio.create_task(runs.start(run, [TestCase.model_validate(tc) for tc in plan.test_cases], target))
-    return run_json(run)
+    await runs.audit(actor, "run.start", "run", run.id, obligations=dec["obligations"])
+    runs.dispatch("run", run.id)
+    return run
 
 
 @app.get("/api/runs")
@@ -247,23 +241,27 @@ async def run_events(run_id: str, after_seq: int = 0, s: AsyncSession = Depends(
 async def stream_events(run_id: str, request: Request, s: AsyncSession = Depends(session)):
     r = await get_or_404(s, Run, run_id)
     last = int(request.headers.get("last-event-id") or 0)
-    q: asyncio.Queue = asyncio.Queue()
-    runs.subscribers[r.id].add(q)  # subscribe first, then backfill, so nothing is missed
+
+    async def rows_after(seq: int):
+        async with Session() as s2:
+            return (await s2.scalars(select(RunEvent).where(RunEvent.run_id == r.id, RunEvent.seq > seq).order_by(RunEvent.seq))).all()
 
     async def gen():
+        # every doorbell (or 5 s of silence) re-reads rows after the last seq sent: Postgres is the truth, so nothing is missed
+        sub = runs.subscribe(r.id)
+        bell = asyncio.ensure_future(anext(sub))
+        seen = last
         try:
-            seen = last
-            async with Session() as s2:
-                for e in (await s2.scalars(select(RunEvent).where(RunEvent.run_id == r.id, RunEvent.seq > last).order_by(RunEvent.seq))).all():
+            while True:
+                for e in await rows_after(seen):
                     seen = e.seq
                     yield {"id": str(e.seq), "event": "run_event", "data": json.dumps(runs.event_json(e))}
-            while True:
-                ev = await q.get()
-                if ev["seq"] > seen:
-                    seen = ev["seq"]
-                    yield {"id": str(ev["seq"]), "event": "run_event", "data": json.dumps(ev)}
+                done, _ = await asyncio.wait({bell}, timeout=5)
+                if done:
+                    bell = asyncio.ensure_future(anext(sub))
         finally:
-            runs.subscribers[r.id].discard(q)
+            bell.cancel()
+            await sub.aclose()
 
     return EventSourceResponse(gen(), ping=15)
 
@@ -271,7 +269,9 @@ async def stream_events(run_id: str, request: Request, s: AsyncSession = Depends
 @app.post("/api/runs/{run_id}/cancel")
 async def cancel_run(run_id: str, s: AsyncSession = Depends(session)):
     r = await get_or_404(s, Run, run_id)
-    runs.cancel_flags.add(r.id)
+    r.cancel_requested = True
+    await s.commit()
+    await runs.cancel_waiting(r.id)  # a run parked at a gate has no process to notice the flag
     await runs.audit("user", "run.cancel", "run", r.id)
     return {"ok": True, "note": "cancels before the next test case"}
 
@@ -320,10 +320,29 @@ async def move_finding(fid: str, body: BoardIn, s: AsyncSession = Depends(sessio
 @app.get("/api/evidence/{eid}")
 async def get_evidence(eid: str, s: AsyncSession = Depends(session)):
     e = await get_or_404(s, Evidence, eid)
+    if not e.uri:
+        raise Problem(404, "not_found", "evidence expired")
+    if e.uri.startswith("s3://"):
+        if not (url := storage.presign(e.uri)):
+            raise Problem(503, "integration_unavailable", "Object storage is not configured")
+        return RedirectResponse(url, status_code=307)
     path = Path(e.uri).resolve()
     if not path.is_relative_to(runs.EVIDENCE_DIR.resolve()) or not path.exists():
         raise Problem(404, "not_found", "evidence expired or missing")
     return FileResponse(path)
+
+
+@app.get("/api/evidence/{eid}/url")
+async def get_evidence_url(eid: str, request: Request, s: AsyncSession = Depends(session)):
+    e = await get_or_404(s, Evidence, eid)
+    if not e.uri:
+        raise Problem(404, "not_found", "evidence expired")
+    url, ttl = (storage.presign(e.uri), storage.url_ttl()) if e.uri.startswith("s3://") else (f"/api/evidence/{e.id}", None)
+    if not url:
+        raise Problem(503, "integration_unavailable", "Object storage is not configured")
+    user = getattr(request.state, "user", None) or {}
+    await runs.audit(user.get("email") or user.get("sub") or "user", "evidence.read", "evidence", e.id, run_id=e.run_id)
+    return {"url": url, "expires_in": ttl}
 
 
 # ---------- approvals ----------
@@ -345,15 +364,20 @@ class DecisionIn(BaseModel):
 
 
 @app.post("/api/approvals/{aid}/decision")
-async def decide(aid: str, body: DecisionIn, s: AsyncSession = Depends(session)):
+async def decide(aid: str, body: DecisionIn, request: Request, s: AsyncSession = Depends(session)):
     a = await get_or_404(s, Approval, aid)
     if a.status != "pending":
         raise Problem(409, "conflict", f"Already {a.status}")
-    a.status, a.decided_by, a.decision_reason, a.decided_at = ("approved" if body.approve else "rejected"), "user", body.reason, now()
+    user = request.state.user
+    if a.subject_type == "patch":
+        await repairs.check_can_decide(s, a, user)
+    a.status, a.decided_by, a.decision_reason, a.decided_at = ("approved" if body.approve else "rejected"), user["sub"], body.reason, now()
     await s.commit()
-    await runs.audit("user", "approval.decide", "approval", a.id, approve=body.approve)
-    if fut := runs.gates.get(a.id):
-        fut.set_result(body.approve)
+    await runs.audit(user["sub"], "approval.decide", "approval", a.id, approve=body.approve)
+    if a.subject_type == "patch":
+        await repairs.on_decision(s, a, body.approve)
+    elif a.subject_type == "run_gate":  # the run is parked at a LangGraph interrupt; continue it from its checkpoint
+        runs.dispatch("resume", a.subject_id, a.id, body.approve)
     return approval_json(a)
 
 
@@ -410,3 +434,8 @@ async def chat(body: ChatIn, s: AsyncSession = Depends(session)):
         yield {"event": "done", "data": "{}"}
 
     return EventSourceResponse(gen())
+
+
+# routers added in the core build (auth, plans, repairs, manifest, insights)
+for _r in (auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router):
+    app.include_router(_r)

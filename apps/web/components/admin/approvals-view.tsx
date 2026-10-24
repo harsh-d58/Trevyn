@@ -8,6 +8,8 @@ import { Card } from "@/components/kit/card"
 import { PageHeader } from "@/components/kit/page-header"
 import { Avatar, Pill, Severity, Tag } from "@/components/kit/pills"
 import { Button } from "@/components/ui/button"
+import { useState } from "react"
+import { api, apiEnabled } from "@/lib/api"
 import { useLive, useLiveStore } from "@/lib/live"
 import { notify } from "@/lib/notify"
 import type { Approval } from "@/lib/types"
@@ -17,7 +19,17 @@ const CATS: Approval["category"][] = ["High-impact tests", "Uncertain diagnoses"
 export function ApprovalsView() {
   const store = useLiveStore()
   const approvals = useLive((s) => s.approvals)
-  const decide = (a: Approval, ok: boolean) => {
+  const [busy, setBusy] = useState<string | null>(null)
+  const decide = async (a: Approval, ok: boolean) => {
+    if (apiEnabled) {
+      setBusy(a.id)
+      try {
+        await api(`/api/approvals/${encodeURIComponent(a.id)}/decision`, { json: { approve: ok, reason: "" } })
+        store.settleApproval(a.id, ok)
+        notify(`${ok ? "Approved" : "Rejected"}: ${a.title}`, ok ? "ok" : "warn")
+      } catch (e) { notify((e as Error).message, "bad") } finally { setBusy(null) }
+      return
+    }
     if (ok) {
       const { undoable } = store.approve(a.id)
       notify(`Approved: ${a.title}`, "ok", undoable ? { action: { label: "Undo", onClick: () => store.undo(a.id) } } : undefined)
@@ -42,8 +54,8 @@ export function ApprovalsView() {
               </div>
               <Severity s={a.risk} /><Avatar k={a.who} />
               <div className="flex gap-2">
-                <Button variant="glass" size="pill-sm" onClick={() => decide(a, false)}>Reject</Button>
-                <Button variant={a.risk === "high" ? "human" : "brand"} size="pill-sm" onClick={() => decide(a, true)}>Approve</Button>
+                <Button variant="glass" size="pill-sm" disabled={busy === a.id} onClick={() => decide(a, false)}>Reject</Button>
+                <Button variant={a.risk === "high" ? "human" : "brand"} size="pill-sm" disabled={busy === a.id} onClick={() => decide(a, true)}>Approve</Button>
               </div>
             </motion.div>
           ))}

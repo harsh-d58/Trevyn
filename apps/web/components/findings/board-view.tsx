@@ -17,6 +17,7 @@ import { Avatar, FindingTypePill, Legend, Pill, Severity } from "@/components/ki
 import { Perforation } from "@/components/kit/ticket"
 import { Button } from "@/components/ui/button"
 import { COLUMNS, columnName } from "@/lib/demo/core"
+import { api, apiEnabled } from "@/lib/api"
 import { useLiveStore } from "@/lib/live"
 import { notify } from "@/lib/notify"
 import type { BoardColumn, Finding } from "@/lib/types"
@@ -98,9 +99,14 @@ export function BoardView() {
     if (!to) return
     const from = list.find((f) => f.id === id)?.column
     if (from === to) return
+    const shake = () => setShakes((s) => ({ ...s, [id]: (s[id] ?? 0) + 1 }))
     const res = store.moveFinding(id, to)
-    if (!res.ok) { notify(res.reason!, "bad"); setShakes((s) => ({ ...s, [id]: (s[id] ?? 0) + 1 })); return }
-    notify(`${id} moved to ${columnName(to)}`)
+    if (!res.ok) { notify(res.reason!, "bad"); shake(); return }
+    if (!apiEnabled || !from) { notify(`${id} moved to ${columnName(to)}`); return }
+    // optimistic: the card has already moved; roll back if the API refuses (e.g. 409 Verified policy)
+    api(`/api/findings/${encodeURIComponent(id)}/board`, { method: "PATCH", json: { column: to } })
+      .then(() => notify(`${id} moved to ${columnName(to)}`))
+      .catch((err: Error) => { store.moveFinding(id, from, true); shake(); notify(err.message, "bad") })
   }
 
   return (

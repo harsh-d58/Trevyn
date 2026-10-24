@@ -18,7 +18,7 @@ from .templates import ART, CSS, META, TEMPLATES
 
 ALL = {"dup_order", "email_validation", "user_enum", "profile_persist", "negative_qty", "oos_500", "no_sec_headers", "slow_orders"}
 _raw = os.getenv("BUGS", "all")
-BUGS = ALL if _raw == "all" else {b.strip() for b in _raw.split(",") if b.strip()}
+BUGS = set(ALL) if _raw == "all" else {b.strip() for b in _raw.split(",") if b.strip()}
 HOOK_TOKEN = os.getenv("TREVYN_HOOK_TOKEN", "")
 DB = Path(os.getenv("DEMO_SHOP_DB", "var/demo-shop.db"))
 
@@ -241,3 +241,12 @@ def hook_reset():
 def hook_orders(email: str = "qa@shop.test"):
     row = db().execute("SELECT COUNT(*) n FROM orders o JOIN users u ON u.id=o.user_id WHERE u.email=?", (email,)).fetchone()
     return {"count": row["n"]}
+
+
+@app.post("/__trevyn/bugs", dependencies=[Depends(hook_auth)])
+async def hook_bugs(request: Request):
+    """Demo-only: set the active bug flags at runtime. `{"bugs": "all"}` restores every planted bug."""
+    raw = (await request.json()).get("bugs", [])
+    BUGS.clear()
+    BUGS.update(ALL if raw == "all" else set(raw) & ALL)
+    return {"ok": True, "bugs": sorted(BUGS)}

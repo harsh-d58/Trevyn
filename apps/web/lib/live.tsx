@@ -113,11 +113,12 @@ function createLiveStore(initial: Workspace) {
     },
 
     /* ---------- findings ---------- */
-    moveFinding(id: string, to: BoardColumn): { ok: boolean; reason?: string } {
+    /** `force` skips the Verified policy; only used to roll back an optimistic move the API rejected */
+    moveFinding(id: string, to: BoardColumn, force = false): { ok: boolean; reason?: string } {
       const f = state.findings.find((x) => x.id === id)
       if (!f) return { ok: false, reason: `Unknown finding ${id}` }
       if (f.column === to) return { ok: true }
-      if (to === "verified" && f.column !== "regression") return { ok: false, reason: VERIFIED_POLICY }
+      if (!force && to === "verified" && f.column !== "regression") return { ok: false, reason: VERIFIED_POLICY }
       set((s) => ({ findings: s.findings.map((x) => (x.id === id ? { ...x, column: to } : x)) }))
       return { ok: true }
     },
@@ -143,6 +144,17 @@ function createLiveStore(initial: Workspace) {
       set((s) => ({ approvals: s.approvals.filter((x) => x.id !== id), loop: { ...s.loop, decide: [s.loop.decide[0] + 1, s.loop.decide[1]] } }))
       log("human", `${a.id} rejected by Alex Chen`)
       if (id.startsWith("GATE-")) store.stopRun("High-impact tests rejected")
+    },
+    /** live API: the decision was recorded server-side; just drop it from the queue (no demo side effects) */
+    settleApproval(id: string, approved: boolean) {
+      const a = state.approvals.find((x) => x.id === id)
+      if (!a) return
+      set((s) => ({
+        approvals: s.approvals.filter((x) => x.id !== id),
+        approved: approved ? [a, ...s.approved] : s.approved,
+        loop: { ...s.loop, decide: [s.loop.decide[0] + 1, s.loop.decide[1]] },
+      }))
+      log("human", `${a.id} ${approved ? "approved" : "rejected"}`)
     },
     undo(id: string) {
       const a = state.approved.find((x) => x.id === id)

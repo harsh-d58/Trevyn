@@ -1,7 +1,7 @@
 # Trevyn — Backend & Remaining Work Blueprint
 
 > **Team:** Dimaag Ka Dahi · CODE APEX 3.0 · iMocha IM-02 Autonomous AI QA Engineer
-> **Status as of 22 Oct 2026:** the dashboard (`apps/web`) is done and runs entirely on demo data. **Everything behind it is still to be built.** That covers the API, database, job queue, AI orchestrator, test runners, policy engine, evidence store, benchmark app, CI and deployment.
+> **Status as of 24 Oct 2026:** the core build guide's 12 steps are implemented (see the status table in `README.md`). Not built: the k6, ZAP, Semgrep and OSV runners and the benchmark harness. Untested against real services: Supabase Auth login, MinIO/S3, OPA server, GitHub/Slack/Jira, the Postgres LangGraph checkpointer and the CI workflows. The original 22 Oct status line is kept in git history.
 > **Sources:** `TREVYN_IM02_DimaagKaDahi.pdf` (pitch deck), `trevyn_complete_project_context (1).md` (the "context doc", cited as §N), `PORTING_PLAN.md`, `DASHBOARD_DESIGN_SPEC.md`, and the current frontend code.
 
 This document lists what is left to build, in what order, how each part should work, and how we will know it is done. It is long on purpose. Each Part can be read alone, so a track owner can open the Part they own and start there.

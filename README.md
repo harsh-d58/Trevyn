@@ -57,16 +57,27 @@ Trevyn is an AI QA engineer that plans tests from your requirements and runs the
 
 ## Project status
 
+Status on 24 Oct 2026, against the 12 steps of the core build guide. "Verified" means it ran end to end on this machine.
+
 | Part | Status |
 |---|---|
-| Web dashboard (`apps/web`): 23 desktop routes, light-glass design system, live-run view, findings board, repair loop | ✅ Built (runs on **demo data**) |
-| FastAPI control plane (`services/api`): projects, plans, runs, SSE events, findings, evidence, approvals, policy gate, copilot chat | ✅ Phase 1 core (SQLite locally, Postgres/Supabase via `DATABASE_URL`) |
-| Orchestrator (`workers/orchestrator`): state machine, Claude adapter, planner + validator + template fallback, verifier V1–V7, diagnosis, repair prompt | ✅ Phase 1 core (in-process; Celery/LangGraph later) |
-| Playwright runner (`workers/playwright-runner`): step interpreter, traces, screenshots, network log, duplicate-POST detection, egress guard | ✅ Python runner (TS/Docker sandbox later) |
-| Planted-bug demo shop (`scenarios/demo-shop`): B1–B6, B8, B10, B11 canary, test hooks | ✅ Built |
-| Redis/Celery, LangGraph, k6 / ZAP / Semgrep / OSV runners, auth, benchmark harness, dashboard wiring | ⏳ Planned |
+| Web dashboard (`apps/web`): 23 routes, live runs, findings, board, approvals, plans, repair panel, copilot, login + user menu | ✅ Live API data when `NEXT_PUBLIC_API_URL` is set; demo fixtures otherwise |
+| 1 · Database: SQLAlchemy models, Alembic migrations `0001`–`0002`, append-only triggers | ✅ Verified on SQLite and Supabase Postgres |
+| 2 · Auth and roles: Supabase JWT, role per route, approver flag, no self-approval of patches, audit log | ✅ Backend verified by unit tests · login page built, not yet tried with a real Supabase project |
+| 3 · Job queue: Celery + Redis, DB-backed gates and cancel, Redis doorbell for live events, stale-run reaper | ✅ Verified with Redis (`REDIS_URL`) and without it (in-process) |
+| 4 · LangGraph orchestrator: checkpointed graph, gates as interrupts, resume after restart | ✅ Verified on SQLite checkpointer · Postgres checkpointer untested |
+| 5 · Plan lifecycle: versions, edit as new version, diff, approve/reject | ✅ API · Plans page lists and approves (no edit/diff screen yet) |
+| 6 · Repair and regression loop: patch proposal, diff guard, approval, regression run, before/after comparison | ✅ Verified (`tests/e2e_repair_loop.py`) · demo shop only; real repos need the GitHub integration |
+| 7 · Policy and security: OPA/Rego (`infra/opa`), SSRF guard, signed run manifests | ✅ 5/5 Rego tests · OPA used when `OPA_URL` is set |
+| 8 · Evidence store: S3/MinIO upload, pre-signed URLs, retention purge | ✅ Unit tests with a fake S3 client · not tried against MinIO/S3 |
+| 9 · Insights: Overview KPIs, analytics, network, history | ✅ API + Overview · Analytics/Network pages still on fixtures |
+| 10 · Frontend wiring | ✅ Runs, findings, board, approvals, plans, repair, overview, audit |
+| 11 · Integrations: GitHub webhook (HMAC), Slack, Jira | ✅ Unit tests · not tried against real services |
+| 12 · CI and ops: GitHub Actions, gitleaks, `infra/docker-compose.yml`, `tasks.ps1` | ✅ Workflows written, not yet run on GitHub |
+| AI provider | Claude or Gemini (`MODEL_PROVIDER`); with no key, template plans and rule-based diagnosis |
+| k6 / ZAP / Semgrep / OSV runners, benchmark harness | ⏳ Not built (Perf/Security/Compat pages say "Not run") |
 
-The dashboard is still backed by fixtures; the core API it will call now runs end to end (`tests/e2e_golden_path.py` finds B1 as `confirmed`, reproduced 2/2, with evidence). The full plan is in **[BACKEND_AND_REMAINING_WORK.md](BACKEND_AND_REMAINING_WORK.md)**.
+Tests: 57 unit tests (`uv run pytest -q`), plus `tests/e2e_golden_path.py` and `tests/e2e_repair_loop.py`. The plan is in **[BACKEND_AND_REMAINING_WORK.md](BACKEND_AND_REMAINING_WORK.md)**.
 
 ---
 
@@ -92,11 +103,11 @@ flowchart LR
 
 **Frontend:** Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4, shadcn/ui (Base UI), Recharts, React Flow, motion, dnd-kit, cmdk, TanStack Query, zod
 
-**Backend (planned):** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy + Alembic, PostgreSQL, Redis + Celery, LangGraph, JSON Schema contracts, MinIO/S3
+**Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy + Alembic, PostgreSQL, Redis + Celery, LangGraph, JSON Schema contracts, MinIO/S3
 
-**Testing engines (planned):** Playwright, pytest, Vitest, JUnit, k6, OWASP ZAP, Semgrep, OSV-Scanner, GitHub Actions
+**Testing engines:** Playwright (built); planned: Playwright, pytest, Vitest, JUnit, k6, OWASP ZAP, Semgrep, OSV-Scanner, GitHub Actions
 
-**Governance (planned):** OPA/Rego, RBAC, managed secrets, egress-restricted Docker workers, Ed25519 signed run manifests
+**Governance:** OPA/Rego, RBAC, managed secrets, egress-restricted Docker workers, Ed25519 signed run manifests
 
 ---
 
@@ -104,15 +115,19 @@ flowchart LR
 
 ```text
 .
-├── apps/web/                        # Next.js dashboard (built)
-├── BACKEND_AND_REMAINING_WORK.md    # backend blueprint & remaining-work plan
-├── DASHBOARD_DESIGN_SPEC.md         # dashboard layout & component spec
-├── GLASS_DESIGN_LANGUAGE.md         # light glassmorphism design language
-├── PORTING_PLAN.md                  # prototype → Next.js porting log
-└── TREVYN_IM02_DimaagKaDahi.pdf     # pitch deck
+├── apps/web/                       # Next.js dashboard
+├── services/api/trevyn_api/        # FastAPI control plane: runs, plans, findings, repairs, auth, policy, insights, integrations
+│   └── migrations/                 # Alembic migrations (Postgres / Supabase)
+├── workers/orchestrator/           # LangGraph run graph, planner, verifier, diagnosis, diff guard, regression, model adapters
+├── workers/playwright-runner/      # Playwright step interpreter and evidence capture
+├── packages/contracts/             # shared Pydantic contracts → schemas/*.json
+├── scenarios/demo-shop/            # planted-bug ShopFlow store
+├── infra/                          # docker-compose.yml (Redis, Postgres, MinIO, OPA) and opa/ policies
+├── tests/                          # unit tests + e2e_golden_path.py, e2e_repair_loop.py
+├── .github/workflows/              # CI and secret scanning
+├── tasks.ps1                       # Windows task runner
+└── BACKEND_AND_REMAINING_WORK.md   # backend blueprint
 ```
-
-Planned additions: `services/api`, `workers/*`, `packages/contracts`, `schemas/`, `scenarios/demo-shop`, `infra/` (see the blueprint).
 
 ---
 
@@ -164,6 +179,41 @@ The dashboard shows a **Live API data** / **Demo data** chip (bottom left). With
 - **No `ANTHROPIC_API_KEY`:** the planner uses template plans and diagnosis uses deterministic rules; the copilot (`POST /api/assistant/chat`) returns 503. With a key, planning, diagnosis, repair prompts and chat use Claude (`claude-opus-5-5`, adaptive thinking).
 - **Fix a planted bug:** restart the shop with that flag removed, e.g. `BUGS=email_validation,user_enum uv run uvicorn demo_shop.app:app --port 3100` fixes B1.
 - `uv run python -m trevyn_contracts` exports the JSON Schemas to `schemas/`.
+- **Postgres / Supabase:** run `uv run alembic upgrade head` once before starting the API (SQLite creates tables on startup).
+- **Tests:** `uv run pytest -q` (unit) · `uv run python tests/e2e_repair_loop.py` (needs shop + API running: finds DEF-142, patches, regresses, expects `verified`).
+- **Job queue (optional):** set `REDIS_URL=redis://localhost:6379/0` and start a worker with `uv run celery -A trevyn_api.worker worker -Q orchestrator,maintenance --pool=solo` (plus `uv run celery -A trevyn_api.worker beat` for the stale-run reaper). Without `REDIS_URL`, runs execute inside the API process and any run left unfinished by a restart is marked failed on startup.
+- **Auth:** `AUTH_MODE=off` (default) runs as a local owner. `AUTH_MODE=supabase` + `SUPABASE_JWKS_URL` (or `SUPABASE_JWT_SECRET`) enforces login and roles; the dashboard login page is not built yet.
+
+---
+
+## Core status and commands
+
+**Windows shortcuts:** `.\tasks.ps1 up | migrate | test | e2e | api | shop | worker | web` (Redis via `infra/docker-compose.yml`). CI (`.github/workflows/ci.yml`) runs ruff + pytest, OPA policy tests, the web type-check/build and a contracts schema drift check; `security.yml` runs gitleaks on PRs.
+
+**Endpoints added in the core build** (full list at `/docs`):
+
+| Area | Endpoints |
+|---|---|
+| Repairs | `POST /api/findings/{id}/repair-proposals`, `GET /api/repairs`, `GET /api/repairs/{id}`, `POST /api/repairs/{id}/verify`, `GET /api/runs/{id}/comparison` |
+| Plan versions | `GET /api/plans`, `PATCH /api/plans/{id}` (new version), `GET /api/plans/{id}/diff`, `GET /api/plans/{id}/runs` |
+| Manifest | `GET /api/runs/{id}/manifest`, `POST /api/runs/{id}/manifest/verify` |
+| Auth & audit | `GET /api/me`, `POST /api/sse-ticket`, `GET/PUT /api/members`, `GET /api/audit` |
+| Insights | `GET /api/dashboard/overview`, `GET /api/insights/analytics`, `GET /api/insights/network`, `GET /api/insights/{perf,security,compat}` (report "Not run" until those engines exist), `GET /api/projects/{id}/history` |
+| Integrations | `GET /api/integrations` (status) · `POST /api/webhooks/github` (HMAC) · `POST /api/findings/{id}/jira` · Slack notifications via `SLACK_WEBHOOK_URL` |
+
+**Environment variables**
+
+| Variable | Purpose |
+|---|---|
+| `AUTH_MODE` | `off` (default, local owner) or `supabase` (JWT + roles; needs `SUPABASE_JWKS_URL` or `SUPABASE_JWT_SECRET`) |
+| `REDIS_URL` | Celery queue + live-event doorbell; unset = runs execute in the API process |
+| `OPA_URL` | OPA server for policy decisions (policies in `infra/opa`) |
+| `S3_*` | S3-compatible evidence store (endpoint, bucket, keys); unset = local `var/evidence` |
+| `GITHUB_WEBHOOK_SECRET` | Verifies GitHub webhook signatures |
+| `SLACK_WEBHOOK_URL` | Slack notifications |
+| `JIRA_*` | Jira issue export (base URL, user, token, project) |
+
+**Supabase note:** the direct host `db.<ref>.supabase.co` is IPv6-only. On IPv4 networks use the **Session pooler** connection string from Supabase → **Connect**.
 
 ---
 

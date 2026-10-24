@@ -13,12 +13,25 @@ import { RunHealth } from "@/components/dashboard/run-health"
 import { Throughput } from "@/components/dashboard/throughput"
 import { WeekSlots } from "@/components/dashboard/week-slots"
 import { SectionTabs } from "@/components/shell/section-tabs"
+import { Suspense } from "react"
 import { getDashboardSummary } from "@/lib/data"
+import { getLiveOverview } from "@/lib/live-data"
+import type { DashboardSummary } from "@/lib/types"
 
 export const metadata: Metadata = { title: "Overview" }
 
 export default async function Overview() {
-  const s = await getDashboardSummary()
+  const demo = await getDashboardSummary()
+  return <Suspense fallback={<Body s={demo} live={false} />}><Live demo={demo} /></Suspense>
+}
+
+/** Live API numbers stream in after the prerendered shell; cards with no backend source yet are hidden in live mode */
+async function Live({ demo }: { demo: DashboardSummary }) {
+  const live = await getLiveOverview()
+  return live ? <Body s={{ ...demo, ...live }} live /> : <Body s={demo} live={false} />
+}
+
+function Body({ s, live }: { s: DashboardSummary; live: boolean }) {
   return (
     <Stagger className="grid gap-3.5">
       <Item><Greeting /></Item>
@@ -35,11 +48,12 @@ export default async function Overview() {
         <Item className="xl:col-span-7"><RunHealth data={s.runHealth} /></Item>
         <Item className="xl:col-span-5"><CategoryPolar data={s.categories} /></Item>
       </div>
-      <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-3">
-        <Item><FailingSuites data={s.topSuites} /></Item>
-        <Item><Throughput data={s.throughput} /></Item>
-        <Item className="md:col-span-2 xl:col-span-1"><WeekSlots data={s.week} /></Item>
-      </div>
+      {!live && (
+        <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-3">
+          <Item><FailingSuites data={s.topSuites} /></Item>
+          <Item><Throughput data={s.throughput} /></Item>
+          <Item className="md:col-span-2 xl:col-span-1"><WeekSlots data={s.week} /></Item>
+        </div>)}
       <Item className="mt-2"><ActiveRuns /></Item>
     </Stagger>
   )

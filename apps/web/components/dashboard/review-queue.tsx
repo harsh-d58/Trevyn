@@ -6,6 +6,7 @@ import Link from "next/link"
 import { AnimatePresence, LayoutGroup, motion } from "motion/react"
 import { useState } from "react"
 import { toast } from "sonner"
+import { api, apiEnabled } from "@/lib/api"
 import { useLive, useLiveStore } from "@/lib/live"
 import type { Approval } from "@/lib/types"
 import { Card, PriorityTag, ProjectChip } from "./bits"
@@ -77,6 +78,12 @@ export function ReviewQueue() {
   const done = useLive((s) => s.approved)
 
   const approve = (a: Approval) => {
+    if (apiEnabled) {
+      api(`/api/approvals/${encodeURIComponent(a.id)}/decision`, { json: { approve: true, reason: "" } })
+        .then(() => { store.settleApproval(a.id, true); toast(`Approved ${a.id}`, { description: a.title }) })
+        .catch((e: Error) => toast.error(e.message))
+      return
+    }
     const { undoable } = store.approve(a.id)
     toast(`Approved ${a.id}`, { description: a.title, action: undoable ? { label: "Undo", onClick: () => store.undo(a.id) } : undefined })
   }

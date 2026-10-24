@@ -12,6 +12,7 @@ import { notify } from "@/lib/notify"
 import { RAIL_MAIN, RAIL_UTILITY, isGroup } from "@/lib/nav"
 import { Appearance } from "./appearance"
 import { Island } from "./island"
+import { UserMenu } from "./user-menu"
 import { Tag } from "@/components/dashboard/bits"
 
 const iconBtn = "press press-icon pulse grid size-9 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-white/80 hover:text-foreground"
@@ -76,7 +77,7 @@ export function TopBar({ onSearch }: { onSearch: () => void }) {
             <Bell size={17} />
             {unread && <span className="absolute top-2 right-2.5 size-2 rounded-full bg-bad ring-2 ring-white" />}
           </button>
-          <span className="ml-0.5 hidden size-9 place-items-center rounded-full bg-[hsl(222_70%_90%)] sm:grid text-[11px] font-bold text-[hsl(222_60%_32%)] ring-2 ring-white">AC</span>
+          <span className="ml-0.5 hidden sm:block"><UserMenu /></span>
         </div>
       </header>
 

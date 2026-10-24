@@ -1,0 +1,35 @@
+# Local infrastructure for Trevyn core (blueprint Step 12). The API, worker, shop and web still run on the host.
+# Start:  docker compose -f infra/docker-compose.yml up -d redis
+# All:    docker compose -f infra/docker-compose.yml --profile full up -d
+services:
+  redis:            # job queue + live-event doorbell (Step 3)
+    image: redis:7
+    ports: ["6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 5 }
+
+  postgres:         # optional local Postgres instead of Supabase (Step 1)
+    image: postgres:16
+    profiles: ["full"]
+    environment: { POSTGRES_USER: trevyn, POSTGRES_PASSWORD: trevyn, POSTGRES_DB: trevyn }
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "trevyn"], interval: 5s, retries: 10 }
+
+  minio:            # S3-compatible evidence store (Step 8, not wired yet)
+    image: minio/minio
+    profiles: ["full"]
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: trevyn, MINIO_ROOT_PASSWORD: trevyn-secret }
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio:/data"]
+
+  opa:              # policy engine (Step 7, not wired yet)
+    image: openpolicyagent/opa:latest
+    profiles: ["full"]
+    command: run --server --addr :8181 /policies
+    ports: ["8181:8181"]
+    volumes: ["./opa:/policies:ro"]
+
+volumes:
+  pgdata:
+  minio:

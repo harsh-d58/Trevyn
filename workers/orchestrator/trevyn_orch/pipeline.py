@@ -1,5 +1,5 @@
-"""Run state machine (Part 6) and the execution pipeline. The orchestrator owns no storage:
-it talks to the control plane through the RunCtx protocol, so the same code can move into a Celery worker later."""
+"""Run state machine (Part 6) and the execution pipeline pieces (start, gates, run_cases, verify_report) that graph.py
+composes. The orchestrator owns no storage: it talks to the control plane through the RunCtx protocol."""
 from __future__ import annotations
 
 import uuid
@@ -40,7 +40,7 @@ class RunCtx(Protocol):
     async def state(self, to: str, reason: str = "") -> None: ...
     async def log(self, actor: str, kind: str, summary: str, status: str | None = None, data: dict | None = None,
                   evidence_ids: list[str] | None = None) -> None: ...
-    async def gate(self, title: str, reason: str, risk: str) -> bool: ...
+    async def open_gate(self, title: str, reason: str, risk: str) -> tuple[str, str, bool]: ...
     async def add_evidence(self, kind: str, path: str, case_id: str) -> str: ...
     async def add_finding(self, tc: TestCase, case: CaseResult, verdict: Verdict, diag: Diagnosis | None,
                           evidence_ids: list[str], repair_prompt: str | None) -> str: ...
@@ -48,33 +48,50 @@ class RunCtx(Protocol):
     def cancelled(self) -> bool: ...
 
 
-async def execute(ctx: RunCtx, cases: list[TestCase], target: Target) -> None:
-    await ctx.state("RUNNING")
-    approved: list[TestCase] = []
-    for tc in cases:
-        if tc.risk == "high":
-            await ctx.state("AWAITING_APPROVAL", f"{tc.test_case_id} is high-risk")
-            ok = await ctx.gate(f"Run high-impact test {tc.test_case_id}", tc.title, "high")
-            await ctx.state("RUNNING", "approved" if ok else "rejected")
-            await ctx.log("human", "gate", f"{tc.test_case_id} {'approved' if ok else 'rejected, skipped'}", "ok" if ok else "skipped")
-            if not ok:
-                continue
-        approved.append(tc)
+def gate_title(tc: TestCase) -> str:
+    return f"Run high-impact test {tc.test_case_id}"
 
+
+async def start(ctx: RunCtx) -> None:
+    await ctx.state("RUNNING")
+
+
+async def open_gate(ctx: RunCtx, tc: TestCase) -> str:
+    """Idempotent: re-entering the gate (as LangGraph does on resume) reuses the approval it already opened."""
+    title = gate_title(tc)
+    ap_id, display, created = await ctx.open_gate(title, tc.title, "high")
+    if created:
+        await ctx.state("AWAITING_APPROVAL", f"{tc.test_case_id} is high-risk")
+        await ctx.log("human", "gate", f"{display}: {title} — waiting for approval", "waiting",
+                      {"approval_id": ap_id, "display_id": display})
+    return ap_id
+
+
+async def close_gate(ctx: RunCtx, tc: TestCase, ok: bool) -> None:
+    await ctx.state("RUNNING", "approved" if ok else "rejected")
+    await ctx.log("human", "gate", f"{tc.test_case_id} {'approved' if ok else 'rejected, skipped'}", "ok" if ok else "skipped")
+
+
+async def cancel(ctx: RunCtx) -> None:
+    await ctx.state("CANCELLING", "kill switch")
+    await ctx.state("CANCELLED")
+
+
+async def run_cases(ctx: RunCtx, approved: list[TestCase], target: Target) -> list[tuple[TestCase, CaseResult]] | None:
+    """Runs the approved cases. Returns None when the run already reached a terminal state (cancelled / infra failure)."""
     await ctx.log("det", "log", f"Playwright runner · chromium · {len(approved)} test cases")
     results: list[tuple[TestCase, CaseResult]] = []
     for tc in approved:
         if ctx.cancelled():
-            await ctx.state("CANCELLING", "kill switch")
-            await ctx.state("CANCELLED")
-            return
+            await cancel(ctx)
+            return None
         job = RunnerJob(job_id=str(uuid.uuid4()), run_id=ctx.run_id, target=target, test_cases=[tc],
                         out_dir=f"{ctx.evidence_dir}/{ctx.run_id}/{tc.test_case_id}")
         res = await run_job(job)
         if res.status != "completed":
             await ctx.log("det", "log", f"Runner infra error on {tc.test_case_id}: {res.error}", "failed")
             await ctx.state("FAILED", res.error or "runner infra error")
-            return
+            return None
         case = res.cases[0]
         for s in case.steps:
             await ctx.log("det", "step", f"{tc.test_case_id} · {s.action} {(tc.steps[s.i].target or '')}"[:160],
@@ -86,6 +103,10 @@ async def execute(ctx: RunCtx, cases: list[TestCase], target: Target) -> None:
                                         f"{case.dup_posts[0].ms_apart} ms apart", "failed")
         results.append((tc, case))
 
+    return results
+
+
+async def verify_report(ctx: RunCtx, results: list[tuple[TestCase, CaseResult]], target: Target) -> None:
     await ctx.state("COLLECTING_EVIDENCE")
     evidence: dict[str, dict[str, str]] = {}
     for tc, case in results:

@@ -2,7 +2,7 @@
 // Administration (from Admin.jsx): Integrations, Policies & access, Settings (+ Appearance, glass spec C.16).
 import { AnimatePresence, motion } from "motion/react"
 import { X } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Appearance } from "@/components/shell/appearance"
 import { Card } from "@/components/kit/card"
 import { Cell, DataTable, Row } from "@/components/kit/data-table"
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { ALLOWLIST, INTEGRATIONS, PERMS, PROVIDERS, RBAC, ROLES, SECRETS } from "@/lib/demo/insights"
+import { api, apiEnabled, type Items } from "@/lib/api"
 import { notify } from "@/lib/notify"
 import { cn } from "@/lib/utils"
 
@@ -139,6 +140,38 @@ export function SettingsView() {
         <div className="max-w-xl"><Appearance /></div>
         <Button variant="glass" size="pill-sm" className="mt-3 w-fit" onClick={() => { try { localStorage.removeItem("trevyn.hint.dismissed") } catch {}; notify("The shortcut hint will show again on next load") }}>Show shortcut hint again</Button>
       </Card>
+      {apiEnabled && <AuditCard />}
     </div>
+  )
+}
+
+type AuditRow = { id: string; ts: string; actor: string; action: string; subject_type: string | null; subject_id: string | null; details: Record<string, unknown> | null }
+
+/** GET /api/audit (admin only): who did what, newest first */
+function AuditCard() {
+  const [rows, setRows] = useState<AuditRow[] | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    api<Items<AuditRow>>("/api/audit").then((r) => setRows(r.items)).catch((e: Error) => setErr(e.message))
+  }, [])
+  return (
+    <Card flush title="Audit log" caption="Every human and system decision, newest first." extra={rows && <span className="text-[11.5px] text-muted-foreground">{rows.length} entries</span>}>
+      {err && <p className="p-6 text-center text-[13px] text-bad">{err}</p>}
+      {!err && !rows && <p className="p-6 text-center text-[13px] text-muted-foreground">Loading…</p>}
+      {rows && rows.length === 0 && <p className="p-6 text-center text-[13px] text-muted-foreground">No audit entries yet.</p>}
+      {rows && rows.length > 0 && (
+        <DataTable head={["When", "Actor", "Action", "Subject", "Details"]} minWidth={760}>
+          {rows.map((r) => (
+            <Row key={r.id}>
+              <Cell className="text-[12px] whitespace-nowrap text-muted-foreground tabular">{new Date(r.ts).toLocaleString()}</Cell>
+              <Cell className="font-mono text-[11.5px]">{r.actor}</Cell>
+              <Cell><Pill tone="brand">{r.action}</Pill></Cell>
+              <Cell className="font-mono text-[11px] text-muted-foreground">{r.subject_type}{r.subject_id ? ` · ${r.subject_id.slice(0, 12)}` : ""}</Cell>
+              <Cell className="max-w-72 truncate font-mono text-[11px] text-muted-foreground" title={r.details ? JSON.stringify(r.details) : ""}>{r.details && Object.keys(r.details).length ? JSON.stringify(r.details) : "—"}</Cell>
+            </Row>
+          ))}
+        </DataTable>
+      )}
+    </Card>
   )
 }
