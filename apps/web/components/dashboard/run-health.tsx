@@ -22,13 +22,14 @@ export function RunHealth({ data }: { data: RunHealthPoint[] }) {
   const [hidden, setHidden] = useState<Record<Series, boolean>>({ passed: false, failed: false })
   const [focus, setFocus] = useState<Series | null>(null)
   const rows = useMemo(() => (range === "7d" ? data.slice(-7) : data), [data, range])
-  const maxRuns = Math.max(...rows.map((r) => r.runs))
-  const maxFailed = Math.max(...rows.map((r) => r.failed))
+  const maxRuns = Math.max(1, ...rows.map((r) => r.runs))
+  const maxFailed = Math.max(1, ...rows.map((r) => r.failed))
+  const hasResults = rows.some((r) => r.runs || r.passed || r.failed)
   const op = (s: Series) => (hidden[s] ? 0 : focus && focus !== s ? 0.22 : 1)
 
   return (
-    <Card title="Run health" caption={`Passed (left axis) and failed (right axis) per day · runs as bars · ${range === "7d" ? "last 7 days" : "last 30 days"}`}
-      extra={<RangeToggle id="health" value={range} options={["7d", "30d"]} onChange={setRange} />} className="h-full">
+    <Card title="Test health" caption={`${rows.length} days`}
+      extra={<RangeToggle id="health" value={range} options={["7d", "30d"]} onChange={setRange} />} className="overview-chart h-full">
       <div className="mb-2 flex flex-wrap gap-1.5">
         {(["passed", "failed"] as const).map((s) => (
           <button key={s} onClick={() => setHidden((h) => ({ ...h, [s]: !h[s] }))} onMouseEnter={() => setFocus(s)} onMouseLeave={() => setFocus(null)}
@@ -39,7 +40,7 @@ export function RunHealth({ data }: { data: RunHealthPoint[] }) {
         ))}
         <span className="inline-flex items-center gap-1.5 px-1.5 text-[11.5px] text-muted-foreground"><i className="h-2.5 w-1 rounded-sm bg-muted-foreground/30" />Runs per day</span>
       </div>
-      <ChartContainer config={config} className="aspect-auto h-[230px] w-full">
+      {!hasResults ? <div className="flex h-[230px] items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 text-center text-[13px] text-muted-foreground">No test history</div> : <ChartContainer config={config} className="aspect-auto h-[230px] w-full">
         <ComposedChart data={rows} margin={{ top: 8, right: -4, left: -12, bottom: 0 }}
           onClick={(e) => { const d = rows[Number(e?.activeTooltipIndex)]; if (d) router.push(`/runs?date=${d.date}`) }}>
           <CartesianGrid vertical={false} strokeDasharray="2 4" stroke="var(--border)" />
@@ -56,7 +57,7 @@ export function RunHealth({ data }: { data: RunHealthPoint[] }) {
           <Line yAxisId="f" dataKey="failed" type="linear" stroke="var(--color-failed)" strokeWidth={2} dot={false} strokeOpacity={op("failed")}
             activeDot={hidden.failed ? false : { r: 4, strokeWidth: 2, stroke: "#fff" }} animationDuration={700} />
         </ComposedChart>
-      </ChartContainer>
+      </ChartContainer>}
     </Card>
   )
 }

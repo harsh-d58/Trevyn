@@ -3,7 +3,7 @@
 // delta pill whose colour follows the metric's good direction. Whole card is a link; hover lifts.
 import Link from "next/link"
 import { motion } from "motion/react"
-import { CircleCheck, Ellipsis, FlaskConical, Inbox, ShieldCheck, Bug, type LucideIcon } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CircleCheck, FlaskConical, Inbox, ShieldCheck, Bug, type LucideIcon } from "lucide-react"
 import { CountUp } from "@/components/fx/numbers"
 import { useLive } from "@/lib/live"
 import type { Kpi, KpiKey } from "@/lib/types"
@@ -17,38 +17,36 @@ const META: Record<KpiKey, { icon: LucideIcon; chip: string; edge: string }> = {
   pending_approvals: { icon: Inbox, chip: "bg-human/12 text-human", edge: "hover:border-human/30" },
 }
 
-function KpiCard({ k }: { k: Kpi }) {
+function KpiCard({ k, live }: { k: Kpi; live: boolean }) {
   const { icon: Icon, chip, edge } = META[k.key]
   const good = k.goodDirection === "up" ? k.delta >= 0 : k.delta <= 0
   return (
-    <motion.div whileHover={{ y: -3 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}>
+    <motion.div whileHover={{ y: -2 }} whileTap={{ scale: 0.99 }} transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}>
       <Link href={k.href} aria-label={`${k.label}: ${k.value}${k.unit ?? ""}`}
-        className={cn("group glass-1 spot pulse flex flex-col rounded-[20px] p-4 transition-[box-shadow,border-color] hover:shadow-(--shadow-float)", edge)}>
+        className={cn("overview-kpi group flex h-full flex-col p-4 transition-[box-shadow,border-color]", edge)}>
         <div className="flex items-start gap-2.5">
-          <span className={cn("grid size-8 place-items-center rounded-[11px] transition-transform duration-200 group-hover:scale-110 group-hover:-rotate-6", chip)}><Icon size={16} /></span>
+          <span className={cn("grid size-8 shrink-0 place-items-center rounded-[9px]", chip)}><Icon size={16} /></span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[12.5px] font-medium">{k.label}</div>
-            <div className="text-[10.5px] text-muted-foreground">vs last 30 days</div>
+            <div className="text-[12px] font-medium leading-snug">{k.label}</div>
           </div>
-          <Ellipsis size={16} className="text-muted-foreground opacity-40 transition-opacity group-hover:opacity-100" />
         </div>
         <div className="mt-4 flex items-end justify-between gap-2">
-          <CountUp value={k.value} decimals={k.unit === "%" ? 1 : 0} suffix={k.unit ?? ""} className="text-[28px] leading-none font-light tracking-[-.02em] tabular" />
-          <span title={`${k.delta > 0 ? "+" : ""}${k.delta}${k.deltaUnit === "pts" ? " points" : "%"} vs the previous 30 days`}
-            className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold", good ? "bg-ok/12 text-ok" : "bg-bad/12 text-bad")}>
-            <i className="size-1.5 rounded-full bg-current" />{k.delta > 0 ? "+" : ""}{k.delta}{k.deltaUnit === "pts" ? " pts" : "%"}
-          </span>
+          <CountUp value={k.value} decimals={k.unit === "%" ? 1 : 0} suffix={k.unit ?? ""} className="text-[30px] leading-none font-medium tracking-[-.035em] tabular" />
+          {k.key !== "pending_approvals" && <span title={`${k.delta > 0 ? "+" : ""}${k.delta}${k.deltaUnit === "pts" ? " points" : "%"} vs the previous ${live ? 7 : 30} days`}
+            className={cn("inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[10px] font-medium", k.delta === 0 ? "bg-muted text-muted-foreground" : good ? "bg-ok/8 text-ok" : "bg-bad/8 text-bad")}>
+            {k.delta !== 0 && (k.delta > 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />)}{k.delta > 0 ? "+" : ""}{k.delta}{k.deltaUnit === "pts" ? " pts" : "%"}
+          </span>}
         </div>
       </Link>
     </motion.div>
   )
 }
 
-export function KpiRow({ kpis }: { kpis: Kpi[] }) {
+export function KpiRow({ kpis, live = false }: { kpis: Kpi[]; live?: boolean }) {
   const pending = useLive((s) => s.approvals.length)
   return (
-    <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-      {kpis.map((k) => <KpiCard key={k.key} k={k.key === "pending_approvals" ? { ...k, value: pending } : k} />)}
+    <div className="overview-kpis grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      {kpis.map((k) => <KpiCard key={k.key} live={live} k={k.key === "pending_approvals" ? { ...k, value: pending } : k} />)}
     </div>
   )
 }

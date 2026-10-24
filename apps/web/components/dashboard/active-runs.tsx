@@ -1,74 +1,45 @@
 "use client"
-// Active runs as folder-tab cards (GLASS_DESIGN_LANGUAGE.md C.11): a pastel tab strip by test type that
-// lifts like a pulled folder tab on hover. Reads the store, so the live card follows the scripted run.
+
 import Link from "next/link"
-import { motion } from "motion/react"
-import { Avatar } from "@/components/kit/pills"
+import { ArrowRight, ArrowUpRight, FlaskConical } from "lucide-react"
 import { RUN_STATUS } from "@/components/kit/pills"
 import { useLive } from "@/lib/live"
-import type { FindingType, RunStatus, RunSummary } from "@/lib/types"
+import type { FindingType, RunSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const TAB: Record<FindingType, [string, string]> = {
-  ui: ["#dce6ff", "UI"], api: ["#d9f1ff", "API"], perf: ["#ffe6d6", "Performance"], security: ["#ffe1ee", "Security"], compat: ["#e6ebf2", "Compat"],
-}
-const BAR: Record<RunStatus, string> = { running: "var(--det)", passed: "var(--ok)", failed: "var(--bad)", warn: "var(--warn)", stopped: "var(--muted-foreground)" }
+const TYPE: Record<FindingType, string> = { ui: "Browser & UI", api: "API", perf: "Performance", security: "Security", compat: "Compatibility" }
+type DashboardRun = RunSummary & { uuid?: string; state?: string }
 
-/** API runs carry an ISO timestamp; demo runs carry display text ("Just now") */
-const when = (s: string) => {
-  const d = new Date(s)
-  return /^\d{4}-/.test(s) && !isNaN(+d) ? d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : s
+function started(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" }) + " UTC"
 }
 
-function FolderCard({ run }: { run: RunSummary }) {
-  const [tint, type] = TAB[run.type]
-  const [pill, label] = RUN_STATUS[run.status]
+export function ActiveRuns({ live = false }: { live?: boolean }) {
+  const runs: DashboardRun[] = useLive((s) => s.runs)
+  const demoRun = useLive((s) => s.run)
   return (
-    <Link href={run.uuid ? `/runs/live?run=${run.uuid}` : run.status === "running" ? "/runs/live" : `/runs?run=${run.id}`} className="press group block">
-      <motion.div className="flex items-center justify-between rounded-t-[18px] px-4 pt-2.5 pb-5 text-[11.5px] font-medium text-[#33405e]"
-        style={{ background: tint }} whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 26 }}>
-        <span suppressHydrationWarning>{when(run.started)}</span>
-        <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10.5px] font-semibold">{run.trigger}</span>
-      </motion.div>
-      <div className="glass-1 spot -mt-3 rounded-[18px] p-4 transition-shadow group-hover:shadow-(--shadow-float)">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="font-mono text-[11px] text-muted-foreground">{run.id} · {type}</div>
-            <div className="mt-0.5 truncate text-[13.5px] font-semibold">{run.name}</div>
-          </div>
-          <span className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold", pill)}>
-            {run.status === "running" && <i className="live-dot size-1.5 rounded-full bg-current" />}{label}
-          </span>
-        </div>
-        <div className="mt-3 flex items-center gap-2.5">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/[.05]">
-            <motion.div className="h-full rounded-full" style={{ background: BAR[run.status] }} initial={{ width: 0 }}
-              animate={{ width: `${(run.passed / run.total) * 100}%` }} transition={{ type: "spring", stiffness: 120, damping: 22 }} />
-          </div>
-          <span className="text-[12px] font-medium tabular">{run.passed}/{run.total}</span>
-          <span className="flex -space-x-1.5">{run.people.map((p) => <Avatar key={p} k={p} size={24} />)}</span>
-        </div>
-      </div>
-    </Link>
-  )
-}
-
-export function ActiveRuns() {
-  const runs = useLive((s) => s.runs)
-  const live = useLive((s) => s.run)
-  const real = useLive((s) => s.source) === "live"
-  return (
-    <section>
-      <div className="mb-3 flex items-end justify-between">
-        <div>
-          <h2 className="text-[15px] font-semibold">Active runs</h2>
-          <p className="text-[11.5px] text-muted-foreground">{real ? "Latest runs across all projects" : "Today across ShopFlow"} · tab colour = test type</p>
-        </div>
-        <Link href="/runs" className="text-[12px] font-medium text-brand hover:underline">All runs</Link>
-      </div>
-      <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-        {runs.slice(0, 4).map((r) => <FolderCard key={r.uuid ?? r.id} run={live?.id === r.id && r.status === "running" ? { ...r, passed: live.done } : r} />)}
-      </div>
+    <section className="overview-runs" aria-labelledby="recent-runs-title">
+      <header className="flex items-start justify-between gap-3 p-5">
+        <h2 id="recent-runs-title" className="text-[15px] font-semibold">Recent runs</h2>
+        <Link href="/runs" className="overview-text-link shrink-0">All runs<ArrowUpRight size={13} /></Link>
+      </header>
+      {runs.length ? <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] text-left text-[12px]">
+          <thead><tr className="border-y border-border bg-muted/40 text-[10px] font-medium text-muted-foreground"><th scope="col" className="px-5 py-2.5 font-medium">Run / test type</th><th scope="col" className="px-3 py-2.5 font-medium">Status</th><th scope="col" className="px-3 py-2.5 font-medium">Passed</th><th scope="col" className="px-5 py-2.5 text-right font-medium">Duration</th></tr></thead>
+          <tbody>{runs.slice(0, 5).map((run, i) => {
+            const [pill, label] = RUN_STATUS[run.status]
+            const count = !live && demoRun?.id === run.id && run.status === "running" ? demoRun.done : run.passed
+            const href = live ? `/runs/live?run=${encodeURIComponent(run.uuid ?? run.id)}` : run.status === "running" ? "/runs/live" : `/runs?run=${encodeURIComponent(run.id)}`
+            return <tr key={run.uuid ?? `${run.id}-${i}`} className="group border-b border-border last:border-0 hover:bg-brand/[.025]">
+              <td className="max-w-[240px] py-3.5 pr-3 pl-5"><Link href={href} className="block truncate font-medium hover:text-brand">{run.name}</Link><div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"><span className="font-mono">{run.id}</span><span>·</span>{TYPE[run.type]}</div><time className="mt-0.5 block text-[10px] text-muted-foreground">{started(run.started)}</time></td>
+              <td className="px-3 py-3.5"><span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-[10px] font-medium", pill)}>{run.status === "running" && <i className="size-1.5 rounded-full bg-current" />}{run.state === "AWAITING_APPROVAL" ? "Awaiting approval" : label}</span></td>
+              <td className="px-3 py-3.5 font-mono text-[11px] tabular">{count}<span className="text-muted-foreground"> / {run.total}</span></td>
+              <td className="px-5 py-3.5 text-right"><Link href={href} aria-label={`Open ${run.id}`} className="inline-flex items-center gap-3 text-[11px] text-muted-foreground hover:text-brand">{run.duration}<ArrowUpRight size={13} /></Link></td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div> : <div className="flex min-h-[180px] flex-col items-center justify-center px-6 py-8 text-center"><span className="overview-empty-icon"><FlaskConical size={21} /></span><h3 className="mt-3 text-[13px] font-semibold">No test runs</h3><Link href="/runs/new" className="overview-text-link mt-4">New test run<ArrowRight size={13} /></Link></div>}
     </section>
   )
 }
