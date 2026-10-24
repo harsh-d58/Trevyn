@@ -1,0 +1,64 @@
+{
+  "properties": {
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+    },
+    "headings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Headings",
+      "type": "array"
+    },
+    "links": {
+      "default": [],
+      "items": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "title": "Links",
+      "type": "array"
+    },
+    "buttons": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Buttons",
+      "type": "array"
+    },
+    "fields": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Fields",
+      "type": "array"
+    },
+    "has_login_form": {
+      "default": false,
+      "title": "Has Login Form",
+      "type": "boolean"
+    },
+    "aria_snapshot": {
+      "default": "",
+      "title": "Aria Snapshot",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "PageMap",
+  "type": "object"
+}

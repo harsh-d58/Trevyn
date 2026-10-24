@@ -78,7 +78,7 @@ export type RunConfig = {
   suites: Record<SuiteKey, boolean>; budget: number; workers: number; synthetic: boolean; stopcrit: boolean
 }
 export const WIZARD_DEFAULTS: RunConfig = {
-  name: "ShopFlow Commerce", env: "staging", url: "https://staging.shopflow.demo", repo: "https://github.com/demo/shopflow", branch: "feature/checkout-fix",
-  acct: "qa-shopper-01", secret: "vault://demo/shopflow/qa-shopper", req: "Users should be able to log in, add products to the cart and place exactly one order per checkout action.",
+  name: "", env: "staging", url: "", repo: "", branch: "",
+  acct: "", secret: "", req: "",
   mode: "gray", suites: { ui: true, apis: true, perf: false, sec: true, compat: false }, budget: 15, workers: 3, synthetic: true, stopcrit: true,
 }

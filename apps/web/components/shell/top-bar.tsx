@@ -1,6 +1,7 @@
 "use client"
 // Top chrome: workspace pill (left), dynamic island (centre, fixed), floating action cluster (right).
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { Bell, Check, ChevronDown, CirclePlay, FlaskConical, FolderKanban, ListChecks, Menu, Palette, Plus, Repeat, Search } from "lucide-react"
 import { useState } from "react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -12,6 +13,8 @@ import { notify } from "@/lib/notify"
 import { RAIL_MAIN, RAIL_UTILITY, isGroup } from "@/lib/nav"
 import { Appearance } from "./appearance"
 import { Island } from "./island"
+import { SectionTabs } from "./section-tabs"
+import { Wordmark } from "./wordmark"
 import { UserMenu } from "./user-menu"
 import { Tag } from "@/components/dashboard/bits"
 
@@ -21,13 +24,16 @@ export function TopBar({ onSearch }: { onSearch: () => void }) {
   const [unread, setUnread] = useState(true)
   const [notif, setNotif] = useState(false)
   const [menu, setMenu] = useState(false)
+  const home = usePathname() === "/"
   return (
     <>
       <header className="sticky top-3 z-30 flex h-[52px] items-start justify-between gap-3">
         <div className="flex gap-2">
         <button onClick={() => setMenu(true)} aria-label="Open navigation" className="press glass-2 grid size-11 place-items-center rounded-full md:hidden"><Menu size={18} /></button>
+        <Wordmark className="hidden md:flex" />
+        {home && <div className="hidden md:block"><SectionTabs layout="tab-active-top" /></div>}
         <DropdownMenu>
-          <DropdownMenuTrigger render={<button className="press glass-2 flex h-11 items-center gap-2 rounded-full pr-3 pl-1.5 text-[13px] font-medium" />}>
+          <DropdownMenuTrigger render={<button className={`press glass-2 h-11 items-center gap-2 rounded-full pr-3 pl-1.5 text-[13px] font-medium ${home ? "flex md:hidden" : "flex"}`} />}>
             <span className="grid size-8 place-items-center rounded-full bg-[hsl(222_80%_94%)] text-[12px] font-bold text-brand">S</span>
             <span className="hidden sm:inline">ShopFlow Commerce</span>
             <span className="rounded-full bg-human/15 px-2 py-0.5 text-[10px] font-bold tracking-wider text-human"><span className="hidden sm:inline">STAGING · </span>DEMO</span>

@@ -5,6 +5,7 @@ A high-risk case calls `interrupt()`: the invocation returns, the run stays AWAI
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -114,8 +115,13 @@ def pg_dsn(url: str) -> str | None:
 
 @asynccontextmanager
 async def checkpointer(database_url: str | None = None, sqlite_path: str | None = None) -> AsyncIterator[Any]:
-    """AsyncPostgresSaver when DATABASE_URL is Postgres, else AsyncSqliteSaver on var/langgraph.db."""
+    """AsyncPostgresSaver when DATABASE_URL is Postgres, else AsyncSqliteSaver on var/langgraph.db.
+    On Windows, async psycopg cannot run on the Proactor event loop that Playwright needs, so checkpoints stay in
+    the local SQLite file there (fine for workers on one machine). CHECKPOINTER=sqlite|postgres overrides."""
     dsn = pg_dsn(database_url if database_url is not None else os.getenv("DATABASE_URL", "").strip())
+    mode = os.getenv("CHECKPOINTER", "sqlite" if sys.platform == "win32" else "auto")
+    if mode == "sqlite":
+        dsn = None
     if dsn:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
         async with AsyncPostgresSaver.from_conn_string(dsn) as saver:

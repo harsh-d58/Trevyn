@@ -50,6 +50,25 @@ class PlanDraft(BaseModel):
     test_cases: list[TestCase]
 
 
+class PageMap(BaseModel):
+    path: str
+    title: str = ""
+    headings: list[str] = []
+    links: list[dict[str, str]] = []
+    buttons: list[str] = []
+    fields: list[dict] = []
+    has_login_form: bool = False
+    aria_snapshot: str = ""
+
+
+class SiteMap(BaseModel):
+    start_url: str
+    pages: list[PageMap] = []
+    crawled_at: str
+    truncated: bool = False
+    errors: list[str] = []
+
+
 # ---- runner contract (Part 3.3) ----
 class Target(BaseModel):
     base_url: str

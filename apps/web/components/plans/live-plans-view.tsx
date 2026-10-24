@@ -13,7 +13,8 @@ import type { ApiPlanSummary } from "@/lib/live-data"
 import { notify } from "@/lib/notify"
 
 type Case = { test_case_id: string; title: string; requirement_ref?: string | null; preconditions?: string[]; steps?: unknown[]; expected_result: string; risk?: "low" | "medium" | "high" }
-type PlanDetail = { id: string; version: number; status: string; source: string; requirement: string; risk_level: string; test_cases: Case[] }
+type SiteMap = { pages: { path: string; title: string; buttons: string[]; fields: { label: string; type: string }[] }[]; crawled_at: string; errors: string[] }
+type PlanDetail = { id: string; project_id: string; version: number; status: string; source: string; requirement: string; risk_level: string; test_cases: Case[]; site_map: SiteMap | null }
 const STATUS_TONE: Record<string, Tone> = { approved: "ok", rejected: "bad", draft: "warn", pending: "human" }
 
 export function LivePlansView({ plans: initial }: { plans: ApiPlanSummary[] }) {
@@ -37,6 +38,15 @@ export function LivePlansView({ plans: initial }: { plans: ApiPlanSummary[] }) {
       setDetail(d)
       setPlans((ps) => ps.map((p) => (p.id === d.id ? { ...p, status: d.status } : p)))
       notify(`Plan v${d.version} ${d.status}`, decision === "approve" ? "ok" : "warn")
+    } catch (e) { notify((e as Error).message, "bad") } finally { setBusy(false) }
+  }
+
+  const rescan = async () => {
+    if (!detail) return
+    setBusy(true)
+    try {
+      const scan = await api<SiteMap>(`/api/projects/${encodeURIComponent(detail.project_id)}/discover`, { method: "POST" })
+      notify(`Scanned ${scan.pages.length} pages. New plans will use this site map.`, "ok")
     } catch (e) { notify((e as Error).message, "bad") } finally { setBusy(false) }
   }
 
@@ -70,7 +80,20 @@ export function LivePlansView({ plans: initial }: { plans: ApiPlanSummary[] }) {
               <Button variant="glass" size="pill-sm" disabled={busy || shown.status === "rejected"} onClick={() => decide("reject")}><X />Reject</Button>
               <Button variant="brand" size="pill-sm" disabled={busy || shown.status === "approved"} onClick={() => decide("approve")}><Check />Approve</Button>
             </div>)}>
-          {shown && (
+          {shown && (<>
+            {shown.site_map && <section className="border-b border-border p-4" aria-label="What Trevyn saw">
+              <div className="flex items-center justify-between gap-3"><h3 className="text-[13px] font-semibold">What Trevyn saw · {shown.site_map.pages.length} pages</h3>
+                <Button variant="glass" size="pill-sm" disabled={busy} onClick={rescan}>Re-scan site</Button></div>
+              <p className="mt-1 text-[11px] text-muted-foreground">Snapshot used to create this plan. A fresh scan applies to new plans.</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {shown.site_map.pages.map((page) => <div key={page.path} className="glass-inset rounded-xl p-3 text-[12px]">
+                  <div className="font-mono font-medium">{page.path}</div>
+                  <div className="mt-1 text-muted-foreground">{page.title || "Untitled page"}</div>
+                  {page.buttons.length > 0 && <div className="mt-2">Buttons: {page.buttons.slice(0, 6).join(", ")}</div>}
+                  {page.fields.length > 0 && <div className="mt-1">Fields: {page.fields.slice(0, 6).map((f) => `${f.label || "Unlabelled"} (${f.type})`).join(", ")}</div>}
+                </div>)}
+              </div>
+            </section>}
             <DataTable head={["Test ID", "Title", "Requirement", "Steps", "Expected", "Risk"]} minWidth={820}>
               {shown.test_cases.map((c) => (
                 <Row key={c.test_case_id}>
@@ -83,7 +106,7 @@ export function LivePlansView({ plans: initial }: { plans: ApiPlanSummary[] }) {
                 </Row>
               ))}
             </DataTable>
-          )}
+          </>)}
         </Card>
       </div>
     </div>

@@ -12,7 +12,7 @@ for line in (Path(".env").read_text().splitlines() if Path(".env").exists() else
 import asyncio  # noqa: E402
 import json  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
-from datetime import UTC  # noqa: E402
+from datetime import UTC, timedelta  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request  # noqa: E402
@@ -25,10 +25,12 @@ from sse_starlette.sse import EventSourceResponse  # noqa: E402
 
 from trevyn_orch import planner  # noqa: E402
 from trevyn_orch.models import ModelUnavailable, adapter, observed  # noqa: E402
+from trevyn_runner.discover import discover  # noqa: E402
+from trevyn_contracts import SiteMap  # noqa: E402
 
 from . import auth, insights, integrations, manifest, plans_ext, policy, repairs, runs, storage, targets  # noqa: E402
 from .common import Problem, get_or_404  # noqa: E402
-from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run,  # noqa: E402
+from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run, SiteMapRecord,  # noqa: E402
                  RunEvent, Session, init_db, now, session)
 
 WEB_VERDICT = {"confirmed": "confirmed", "needs_review": "likely", "inconclusive": "inconclusive"}
@@ -76,7 +78,9 @@ async def healthz():
 @app.get("/readyz")
 async def readyz(s: AsyncSession = Depends(session)):
     await s.scalar(select(1))
-    return {"ok": True, "db": s.bind.dialect.name, "ai": adapter.available}
+    return {"ok": True, "db": s.bind.dialect.name, "ai": adapter.available,
+            "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
+            "planner_model": getattr(adapter, "models", {}).get("planner", os.getenv("MODEL_PLANNER", "claude-opus-5-5"))}
 
 
 # ---------- projects ----------
@@ -120,16 +124,54 @@ async def create_project(body: ProjectIn, s: AsyncSession = Depends(session)):
 
 
 # ---------- plans ----------
+async def site_snapshot(s: AsyncSession, proj: Project, env: Environment, *, refresh: bool = False) -> SiteMapRecord:
+    latest = await s.scalar(select(SiteMapRecord).where(SiteMapRecord.project_id == proj.id,
+                                                          SiteMapRecord.environment_id == env.id)
+                            .order_by(SiteMapRecord.crawled_at.desc()).limit(1))
+    if latest and not refresh and latest.crawled_at.replace(tzinfo=UTC) > now() - timedelta(hours=1):
+        return latest
+    if not env.local_runner and (err := targets.check_url(env.base_url)):
+        raise Problem(403, "target_blocked", err)
+    try:
+        mapped = await discover(env.base_url, proj.allowed_domains)
+    except Exception as exc:
+        raise Problem(503, "discovery_failed", f"Site scan failed: {type(exc).__name__}") from exc
+    record = SiteMapRecord(project_id=proj.id, environment_id=env.id, content=mapped.model_dump())
+    s.add(record)
+    await s.flush()
+    return record
+
+
+@app.post("/api/projects/{pid}/discover")
+async def refresh_site_map(pid: str, s: AsyncSession = Depends(session)):
+    proj = await get_or_404(s, Project, pid)
+    env = await s.scalar(select(Environment).where(Environment.project_id == proj.id))
+    record = await site_snapshot(s, proj, env, refresh=True)
+    await s.commit()
+    return {"id": record.id, **record.content}
+
+
+@app.get("/api/projects/{pid}/site-map")
+async def get_site_map(pid: str, s: AsyncSession = Depends(session)):
+    await get_or_404(s, Project, pid)
+    record = await s.scalar(select(SiteMapRecord).where(SiteMapRecord.project_id == pid)
+                            .order_by(SiteMapRecord.crawled_at.desc()).limit(1))
+    if not record:
+        raise Problem(404, "not_found", "This project has not been scanned yet")
+    return {"id": record.id, **record.content}
+
+
 class PlanIn(BaseModel):
     requirement: str
     mode: str = "black_box"
     environment_id: str | None = None
 
 
-def plan_json(p: Plan) -> dict:
-    return {"id": p.id, "version": p.version, "status": p.status, "source": p.source, "requirement": p.requirement,
+def plan_json(p: Plan, site_map: dict | None = None) -> dict:
+    return {"id": p.id, "project_id": p.project_id, "version": p.version, "status": p.status, "source": p.source, "requirement": p.requirement,
             "test_mode": p.test_mode, "risk_level": p.risk_level, "stack_hypotheses": p.stack_hypotheses,
-            "test_cases": p.test_cases, "created_at": p.created_at.isoformat()}
+            "test_cases": p.test_cases, "site_map_id": p.site_map_id, "site_map": site_map,
+            "created_at": p.created_at.isoformat()}
 
 
 @app.post("/api/projects/{pid}/plans", status_code=201)
@@ -137,20 +179,28 @@ async def create_plan(pid: str, body: PlanIn, s: AsyncSession = Depends(session)
     proj = await get_or_404(s, Project, pid)
     env = await (s.get(Environment, body.environment_id) if body.environment_id else
                  s.scalar(select(Environment).where(Environment.project_id == pid)))
-    draft, usages, source = await planner.generate(body.requirement, env.base_url, proj.allowed_domains, body.mode)
+    if not env or env.project_id != proj.id:
+        raise Problem(404, "not_found", "Environment not found in this project")
+    snapshot = await site_snapshot(s, proj, env) if not env.hook_url else None
+    site_map = SiteMap.model_validate(snapshot.content) if snapshot else None
+    draft, usages, source = await planner.generate(body.requirement, env.base_url, proj.allowed_domains, body.mode,
+                                                    site_map=site_map, has_hook=bool(env.hook_url))
     for u in usages:
         await runs.record_model(u, None)
     risk = max((tc.risk for tc in draft.test_cases), key=["low", "medium", "high"].index, default="low")
     p = Plan(project_id=pid, environment_id=env.id, requirement=body.requirement, test_mode=body.mode, source=source, risk_level=risk,
+             site_map_id=snapshot.id if snapshot else None,
              stack_hypotheses=draft.stack_hypotheses, test_cases=[tc.model_dump(exclude_none=True) for tc in draft.test_cases])
     s.add(p)
     await s.commit()
-    return plan_json(p)
+    return plan_json(p, snapshot.content if snapshot else None)
 
 
 @app.get("/api/plans/{plan_id}")
 async def get_plan(plan_id: str, s: AsyncSession = Depends(session)):
-    return plan_json(await get_or_404(s, Plan, plan_id))
+    p = await get_or_404(s, Plan, plan_id)
+    snapshot = await s.get(SiteMapRecord, p.site_map_id) if p.site_map_id else None
+    return plan_json(p, snapshot.content if snapshot else None)
 
 
 @app.post("/api/plans/{plan_id}/{decision}")
@@ -161,7 +211,8 @@ async def decide_plan(plan_id: str, decision: str, s: AsyncSession = Depends(ses
     p.status = "approved" if decision == "approve" else "rejected"
     await s.commit()
     await runs.audit("user", f"plan.{decision}", "plan", p.id)
-    return plan_json(p)
+    snapshot = await s.get(SiteMapRecord, p.site_map_id) if p.site_map_id else None
+    return plan_json(p, snapshot.content if snapshot else None)
 
 
 # ---------- runs ----------

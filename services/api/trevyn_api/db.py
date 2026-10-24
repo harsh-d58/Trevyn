@@ -74,7 +74,17 @@ class Plan(Base):
     stack_hypotheses: Mapped[list] = mapped_column(default=list)
     test_cases: Mapped[list] = mapped_column(default=list)  # TestCase[] (schema-validated on write)
     risk_level: Mapped[str] = mapped_column(String(10), default="low")
+    site_map_id: Mapped[str | None] = mapped_column(ForeignKey("site_maps.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SiteMapRecord(Base):
+    __tablename__ = "site_maps"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    environment_id: Mapped[str] = mapped_column(ForeignKey("environments.id"), index=True)
+    content: Mapped[dict] = mapped_column(JSON)
+    crawled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Run(Base):

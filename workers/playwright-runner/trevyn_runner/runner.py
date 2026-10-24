@@ -13,6 +13,7 @@ import httpx
 from playwright.async_api import Page, async_playwright
 
 from trevyn_contracts import (AssertionResult, CaseResult, DupPost, RunnerJob, RunnerResult, StepResult, TestCase)
+from .browser import launch
 
 SECRET_RE = re.compile(r"(eyJ[\w-]+\.[\w-]+\.[\w-]+|Bearer\s+\S+|(?i:password|token|secret)=[^&\s]+)")
 DUP_WINDOW_MS = 2000
@@ -207,7 +208,7 @@ async def run_job(job: RunnerJob) -> RunnerResult:
     result = RunnerResult(job_id=job.job_id, status="completed", started_at=datetime.now(UTC).isoformat())
     try:
         async with async_playwright() as pw:
-            browser = await getattr(pw, job.browser).launch(headless=job.headless)
+            browser = await launch(pw, job.browser, headless=job.headless)
             for tc in job.test_cases:
                 result.cases.append(await run_case(browser, job, tc, out))
             await browser.close()

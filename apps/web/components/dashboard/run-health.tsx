@@ -44,9 +44,9 @@ export function RunHealth({ data }: { data: RunHealthPoint[] }) {
           onClick={(e) => { const d = rows[Number(e?.activeTooltipIndex)]; if (d) router.push(`/runs?date=${d.date}`) }}>
           <CartesianGrid vertical={false} strokeDasharray="2 4" stroke="var(--border)" />
           <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={shortDate} />
-          <YAxis yAxisId="t" tickLine={false} axisLine={false} width={40} />
+          <YAxis yAxisId="t" tickLine={false} axisLine={false} width={40} allowDecimals={false} domain={[0, (max: number) => Math.max(max, 4)]} />
           <YAxis yAxisId="f" orientation="right" tickLine={false} axisLine={false} width={34} tick={{ fill: "var(--bad)" }}
-            domain={[-maxFailed * 0.8, maxFailed * 1.15]} ticks={[0, Math.round(maxFailed / 2), maxFailed]} />
+            domain={[-maxFailed * 0.8, maxFailed * 1.15]} ticks={[...new Set([0, Math.round(maxFailed / 2), maxFailed])]} />
           <YAxis yAxisId="r" hide domain={[0, maxRuns * 6]} />
           <Tooltip cursor={{ stroke: "var(--foreground)", strokeOpacity: 0.15 }}
             content={(p) => <GlassTooltip {...p} labelFormat={shortDate} rows={{ passed: "Passed", failed: "Failed", runs: "Runs" }} />} />
