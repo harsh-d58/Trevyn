@@ -202,9 +202,11 @@ export function RealRunView({ runId }: { runId: string }) {
         </Card>
         <RunApprovals runId={runId} events={events} />
         <LanesPanel graph={graph} />
-        <Card title="Findings from this run">
-          {findings.length ? findings.map((f) => <Link key={f.seq} href={`/findings/${f.summary.split(":")[0]}`} className="block py-1.5 text-[13px] hover:underline">{f.summary}</Link>)
-            : <p className="text-[13px] text-muted-foreground">None yet. Findings appear after verification.</p>}
+        <Card title="Findings from this run" className="h-[360px]">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1" role="region" aria-label="Findings from this run" tabIndex={0}>
+            {findings.length ? findings.map((f) => <Link key={f.seq} href={`/findings/${f.summary.split(":")[0]}`} className="block py-1.5 text-[13px] hover:underline">{f.summary}</Link>)
+              : <p className="text-[13px] text-muted-foreground">None yet. Findings appear after verification.</p>}
+          </div>
         </Card>
       </div>
     </div>

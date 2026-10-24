@@ -2,7 +2,7 @@ import asyncio
 from logging.config import fileConfig
 
 from sqlalchemy import pool
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
@@ -30,7 +30,12 @@ for _line in (Path(".env").read_text().splitlines() if Path(".env").exists() els
 
 from trevyn_api.db import URL, Base  # noqa: E402
 
-config.set_main_option("sqlalchemy.url", URL.replace("%", "%%"))
+# Migrations need one stable session for schema changes; app traffic may use
+# Supabase's transaction endpoint, which does not preserve session state.
+_migration_url = make_url(URL)
+if (_migration_url.host or "").endswith(".pooler.supabase.com") and _migration_url.port == 6543:
+    _migration_url = _migration_url.set(port=5432)
+config.set_main_option("sqlalchemy.url", _migration_url.render_as_string(hide_password=False).replace("%", "%%"))
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

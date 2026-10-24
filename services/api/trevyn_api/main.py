@@ -351,8 +351,11 @@ async def run_events(run_id: str, after_seq: int = 0, s: AsyncSession = Depends(
 
 
 @app.get("/api/runs/{run_id}/events/stream")
-async def stream_events(run_id: str, request: Request, after_seq: int = 0, s: AsyncSession = Depends(session)):
-    r = await get_or_404(s, Run, run_id)
+async def stream_events(run_id: str, request: Request, after_seq: int = 0):
+    # Close the lookup session before returning the long-lived SSE response.
+    async with Session() as s:
+        r = await get_or_404(s, Run, run_id)
+        rid = r.id
     try:
         last = max(0, after_seq, int(request.headers.get("last-event-id") or 0))
     except ValueError:
@@ -360,11 +363,11 @@ async def stream_events(run_id: str, request: Request, after_seq: int = 0, s: As
 
     async def rows_after(seq: int):
         async with Session() as s2:
-            return (await s2.scalars(select(RunEvent).where(RunEvent.run_id == r.id, RunEvent.seq > seq).order_by(RunEvent.seq))).all()
+            return (await s2.scalars(select(RunEvent).where(RunEvent.run_id == rid, RunEvent.seq > seq).order_by(RunEvent.seq))).all()
 
     async def gen():
         # every doorbell (or 5 s of silence) re-reads rows after the last seq sent: Postgres is the truth, so nothing is missed
-        sub = runs.subscribe(r.id)
+        sub = runs.subscribe(rid)
         bell = asyncio.ensure_future(anext(sub))
         seen = last
         try:

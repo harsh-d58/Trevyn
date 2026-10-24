@@ -11,7 +11,7 @@ import { Card } from "./bits"
 import { cn } from "@/lib/utils"
 import { CircleCheck } from "lucide-react"
 
-const COLOR: Record<FindingType, string> = { ui: "var(--cat-ui)", api: "var(--cat-api)", perf: "var(--cat-perf)", security: "var(--cat-sec)", compat: "var(--cat-compat)" }
+const COLOR: Record<FindingType, string> = { ui: "var(--cat-ui)", api: "var(--cat-api)", perf: "var(--cat-perf)", security: "var(--cat-sec)", accessibility: "var(--cat-a11y)", compat: "var(--cat-compat)" }
 const C = 90, R_MIN = 26, R_MAX = 84
 
 function arc(a0: number, a1: number, r: number) {

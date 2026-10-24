@@ -40,3 +40,18 @@ No Git commit or push was performed. The user should review the diff and run Git
 - **Diagrams:** `FlowMap` sizes itself from its nodes' real bounds; cards grow with the diagram. New templates: Performance (page → metrics vs thresholds) and Compatibility (case × browser matrix). API testing counts every same-host XHR/fetch call. Verified: all 7 QE pages, two runs, 0 nodes outside their card.
 - **ZAP** now reports "Docker engine is not running (start Docker Desktop)" when Docker is down.
 - **Checks:** 111 Python tests, Ruff, TypeScript, full ESLint, production build.
+
+## Update — 25 Oct: queue deadlock and database connection limit
+
+- Investigated RUN-2496 stuck before execution. Redis was healthy. The solo Celery worker held RUN-2495 inside `wait_for_slot`, waiting for RUN-2494, whose execution task no longer existed. Maintenance tasks were queued on that same worker and could not reap the stale blocker.
+- Celery queue waits now raise `RunSlotBusy` and retry after three seconds, releasing the worker for other runs and maintenance. In-process waits still poll. A retry of a `QUEUED` run skips initial validation, and duplicate deliveries for runs that already started or finished are ignored. Waiting retries do not repeat the same queue log on every attempt.
+- Recovery also exposed Supabase's session-pooler limit: `(EMAXCONNSESSION) max clients reached ... pool_size: 15`. Each Postgres process now defaults to `DB_POOL_SIZE=3` and `DB_MAX_OVERFLOW=0`; the example env documents both settings. SQLite configuration is unchanged.
+- Restarted the API and the waiting worker with these fixes, restored its unacknowledged task through Kombu, and used the existing stale-run cleanup for RUN-2494. RUN-2495 and RUN-2496 failed with the database connection error preserved in their history. Retried RUN-2496's approved plan as RUN-2497.
+- Verification: **115 Python tests passed**, including new tests for nonblocking queue waits, duplicate delivery/queued retries, and Celery retry behavior. Ruff `F,E9` passed. The API returned 200 and the corrected worker answered `pong`; the configured Postgres pool size was verified as 3.
+- RUN-2497 was confirmed `RUNNING` with 34 persisted events: passive security completed (five pages checked) and the Chromium UI lane advanced to 1/16. The earlier queue stall is cleared; this is progress verification, not a claim that the full retry has completed.
+
+### Follow-up: session limit and completed retry
+
+- RUN-2497 finished `COMPLETED`: 15 of 16 test cases passed, one failed, and the report finished. RUN-2496 remains FAILED with its original connection error for diagnosis.
+- The session-mode Supabase endpoint (`:5432`) limits this project to 15 clients. A small SQLAlchemy pool alone did not prevent the error under dashboard traffic. The local `.env` now points to the transaction pooler (`:6543`), and `.env.example` documents it. Transaction mode uses disabled asyncpg and SQLAlchemy statement caches plus unique prepared-statement names. A fixed pool of three connections with zero overflow reuses connections and avoids DNS churn from a connection per request. Alembic uses one session-mode connection for migrations.
+- The run-event SSE endpoint releases its lookup database session before it starts the long-lived stream. Both API and worker were restarted on the transaction endpoint. Verification: eight parallel `/api/runs` requests and `/readyz` returned HTTP 200; the run SSE returned event 240; all 115 Python tests and Ruff checks passed.

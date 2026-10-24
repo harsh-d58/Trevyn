@@ -65,19 +65,18 @@ async def test_two_live_streams_only_emit_their_own_run_events(run):
         assert (await s.get(Run, run.id)).counts["passed"] == 1
         assert (await s.get(Run, other_id)).counts["failed"] == 1
     request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""})
-    async with Session() as s:
-        first = await stream_events(run.id, request, after_seq=1, s=s)
-        second = await stream_events(other_id, request, after_seq=1, s=s)
-        try:
-            a, b = await asyncio.gather(
-                asyncio.wait_for(anext(first.body_iterator), 2),
-                asyncio.wait_for(anext(second.body_iterator), 2),
-            )
-            assert a["id"] == b["id"] == "2"
-            assert "first verdict" in a["data"] and "second verdict" not in a["data"]
-            assert "second verdict" in b["data"] and "first verdict" not in b["data"]
-        finally:
-            await asyncio.gather(first.body_iterator.aclose(), second.body_iterator.aclose())
+    first = await stream_events(run.id, request, after_seq=1)
+    second = await stream_events(other_id, request, after_seq=1)
+    try:
+        a, b = await asyncio.gather(
+            asyncio.wait_for(anext(first.body_iterator), 2),
+            asyncio.wait_for(anext(second.body_iterator), 2),
+        )
+        assert a["id"] == b["id"] == "2"
+        assert "first verdict" in a["data"] and "second verdict" not in a["data"]
+        assert "second verdict" in b["data"] and "first verdict" not in b["data"]
+    finally:
+        await asyncio.gather(first.body_iterator.aclose(), second.body_iterator.aclose())
 
 
 async def test_events_written_by_two_os_processes_keep_their_run_ids(run):
@@ -178,3 +177,63 @@ async def test_one_run_executes_at_a_time(run, monkeypatch):
         logged = (await s.scalars(select(RunEvent).where(RunEvent.run_id == nxt_id))).all()
     assert any("waiting for" in e.summary for e in logged)
     assert await asyncio.wait_for(waiter, 2) is True
+
+
+async def test_celery_queue_wait_releases_worker_and_does_not_repeat_logs(run):
+    async with Session() as s:
+        queued = Run(display_id=f"RUN-WAIT-{uuid.uuid4().hex[:8]}", project_id=run.project_id,
+                     plan_id=run.plan_id, environment_id=run.environment_id, name="waiting", state="QUEUED")
+        s.add(queued)
+        await s.commit()
+        rid = queued.id
+    for _ in range(2):
+        with pytest.raises(runs.RunSlotBusy):
+            await asyncio.wait_for(runs.wait_for_slot(rid, wait=False), 2)
+    async with Session() as s:
+        events = (await s.scalars(select(RunEvent).where(RunEvent.run_id == rid))).all()
+        assert len([e for e in events if (e.data or {}).get("blocked_by")]) == 1
+
+
+async def test_queued_retry_skips_validation_and_completed_delivery_is_ignored(monkeypatch):
+    from types import SimpleNamespace
+    invoked = []
+    record = SimpleNamespace(state="QUEUED")
+    deps = SimpleNamespace(cases=[], ctx=SimpleNamespace())
+
+    async def load(rid):
+        return record, deps
+
+    async def slot(rid, **kwargs):
+        assert kwargs == {"wait": False}
+        return True
+
+    async def invoke(rid, context, payload):
+        invoked.append(rid)
+
+    monkeypatch.setattr(runs, "_load", load)
+    monkeypatch.setattr(runs, "wait_for_slot", slot)
+    monkeypatch.setattr(runs, "_invoke", invoke)
+    await runs.execute_run("retry-test", wait_for_queue=False)
+    record.state = "COMPLETED"
+    await runs.execute_run("retry-test", wait_for_queue=False)
+    assert invoked == ["retry-test"]
+
+
+def test_worker_retries_busy_slot_instead_of_blocking(monkeypatch):
+    from celery.exceptions import Retry
+    from trevyn_api import worker
+    calls = []
+
+    def busy(coro):
+        coro.close()
+        raise runs.RunSlotBusy("RUN-BLOCKER")
+
+    def retry(**kwargs):
+        calls.append(kwargs)
+        raise Retry()
+
+    monkeypatch.setattr(worker, "_run", busy)
+    monkeypatch.setattr(worker.run_execute, "retry", retry)
+    with pytest.raises(Retry):
+        worker.run_execute.run("waiting-run")
+    assert calls[0]["countdown"] == runs.SLOT_POLL_SECONDS

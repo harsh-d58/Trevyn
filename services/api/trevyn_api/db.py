@@ -6,8 +6,10 @@ import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -22,9 +24,16 @@ def _url() -> str:
 
 
 URL = _url()
-# Supabase transaction pooler (port 6543) does not support prepared statements
-_args = {"statement_cache_size": 0} if ":6543" in URL else {}
-engine = create_async_engine(URL, connect_args=_args, pool_pre_ping=True)
+_parsed = urlsplit(URL)
+# Supabase transaction mode shares backends across clients but has no prepared
+# statement cache. SQLAlchemy's asyncpg dialect also needs unique statement names.
+_transaction_pooler = (_parsed.hostname or "").endswith(".pooler.supabase.com") and _parsed.port == 6543
+_engine_url = make_url(URL).update_query_dict({"prepared_statement_cache_size": "0"}) if _transaction_pooler else URL
+_args = ({"statement_cache_size": 0, "prepared_statement_name_func": lambda: f"__trevyn_{uuid.uuid4().hex}__"}
+         if _transaction_pooler else {})
+_pool = ({"pool_size": int(os.getenv("DB_POOL_SIZE", "3")),
+          "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "0"))} if URL.startswith("postgresql") else {})
+engine = create_async_engine(_engine_url, connect_args=_args, pool_pre_ping=True, **_pool)
 Session = async_sessionmaker(engine, expire_on_commit=False)
 
 

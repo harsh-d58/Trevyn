@@ -1,9 +1,11 @@
 // Finding detail backed by GET /api/findings/{id}: verdict checks, evidence, hypothesis (labelled), repair prompt.
 import Link from "next/link"
+import { ArrowLeft } from "lucide-react"
 import { Card } from "@/components/kit/card"
 import { PageHeader } from "@/components/kit/page-header"
 import { Pill, Severity } from "@/components/kit/pills"
 import { API_URL, type ApiFindingDetail } from "@/lib/api"
+import { plainFinding } from "@/lib/findings/plain-language"
 import { RepairPanel } from "./repair-panel"
 import { FlowMap } from "@/components/charts/flow-map"
 
@@ -13,13 +15,20 @@ type Journey = { nodes: { id: string; label: string; sub: string; x: number; y: 
   edges: { from: string; to: string; k?: "mut" }[]; w: number; h: number }
 
 export function RealFindingView({ f, journey }: { f: ApiFindingDetail; journey?: Journey | null }) {
+  const plain = plainFinding(f)
   const shots = f.evidence_items.filter((e) => e.kind === "screenshot_failure" || e.kind === "screenshot")
   const files = f.evidence_items.filter((e) => !e.kind.startsWith("screenshot"))
   const v = f.verdict_detail
   return (
     <div className="grid gap-4">
-      <PageHeader eyebrow={`${f.id} · ${f.test_case_id} · ${f.runId}`} title={f.title}><Severity s={f.severity} /><Pill tone={STATUS_TONE[f.status as keyof typeof STATUS_TONE] ?? "mut"}>{f.status}</Pill>
+      <Link href="/findings" className="inline-flex w-fit items-center gap-1 text-[13px] font-medium text-brand hover:underline"><ArrowLeft size={14} />All findings</Link>
+      <PageHeader eyebrow={`${f.id} · Run ${f.runId}`} title={plain.headline}><Severity s={f.severity} /><Pill tone={STATUS_TONE[f.status as keyof typeof STATUS_TONE] ?? "mut"}>{f.status}</Pill>
           <Link href={`/runs/live?run=${f.runUuid}`}><Pill tone="brand">Open run</Pill></Link></PageHeader>
+      <Card title="Why this matters">
+        <p className="text-[13.5px] leading-relaxed">{plain.explanation}</p>
+        {plain.location && <p className="mt-2 text-[12px] text-muted-foreground">Where: <span className="font-mono text-foreground">{plain.location}</span></p>}
+        {plain.headline !== f.title && <details className="mt-3 text-[12px] text-muted-foreground"><summary className="w-fit cursor-pointer hover:text-foreground">Original technical title</summary><p className="mt-1">{f.title}</p></details>}
+      </Card>
       {journey?.nodes.length ? <Card title={`Journey · ${f.test_case_id}`}><div><FlowMap nodes={journey.nodes} edges={journey.edges} w={journey.w} h={journey.h} label="Test journey" /></div></Card> : null}
       <div className="grid gap-4 xl:grid-cols-[1fr_1.4fr]">
         <div className="grid content-start gap-4">

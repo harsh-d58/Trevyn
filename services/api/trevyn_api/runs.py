@@ -298,16 +298,23 @@ EXECUTING = ("RUNNING", "COLLECTING_EVIDENCE", "VERIFYING", "FINDINGS_READY", "I
 SLOT_POLL_SECONDS = 3
 
 
-async def wait_for_slot(run_id: str) -> bool:
+class RunSlotBusy(Exception):
+    """Let a Celery task retry later instead of occupying the only worker while queued."""
+
+
+async def wait_for_slot(run_id: str, *, wait: bool = True) -> bool:
     """One run executes at a time (lanes share one machine; overlapping runs made each other time out). A queued run
     starts when no other run is executing and no earlier-queued run is waiting (first come, first served). Checked in
     the database so it holds for in-process runs and for any number of Celery workers. False if cancelled meanwhile."""
-    announced = None
+    async with Session() as s:
+        last = await s.scalar(select(RunEvent).where(RunEvent.run_id == run_id, RunEvent.event_type == "log")
+                              .order_by(RunEvent.seq.desc()).limit(1))
+        announced = (last.data or {}).get("blocked_by") if last else None
     while True:
         async with Session() as s:
             me = await s.get(Run, run_id)
             if me is None or me.state not in ("QUEUED",) or me.cancel_requested:
-                return me is not None and not me.cancel_requested
+                return False
             blocker = await s.scalar(select(Run).where(Run.id != run_id, Run.state.in_(EXECUTING))
                                      .order_by(Run.started_at).limit(1))
             if blocker is None:
@@ -315,28 +322,38 @@ async def wait_for_slot(run_id: str) -> bool:
                                                            Run.started_at < me.started_at).order_by(Run.started_at).limit(1))
         if blocker is None:
             return True
-        if blocker.id != announced:
-            announced = blocker.id
+        if blocker.display_id != announced:
+            announced = blocker.display_id
             note = f"Queued: waiting for {blocker.display_id} to finish (one run executes at a time)"
             await append_event(run_id, "det", "log", note, "waiting", {"blocked_by": blocker.display_id})
             from . import events
             await events.publish(me.project_id, "run_activity", {"run": me.display_id, "uuid": run_id, "kind": "queue",
                                                                  "summary": note, "status": "waiting"})
+        if not wait:
+            raise RunSlotBusy(blocker.display_id)
         await asyncio.sleep(SLOT_POLL_SECONDS)
 
 
-async def execute_run(run_id: str) -> None:
+async def execute_run(run_id: str, *, wait_for_queue: bool = True) -> None:
     async with _run_locks[run_id]:
-        _, deps = await _load(run_id)
-        try:
-            await deps.ctx.state("VALIDATING_INPUT")
-            await deps.ctx.state("QUEUED", "policy allowed")
-        except Exception as e:
-            log.exception("run %s failed validation", run_id)
-            await deps.ctx.state("FAILED", f"{type(e).__name__}: {e}"[:300])
+        run, deps = await _load(run_id)
+        if run.state not in ("CREATED", "QUEUED"):
+            log.info("execute %s ignored: run is %s", run_id, run.state)
             return
-        if not await wait_for_slot(run_id):
-            await deps.ctx.state("CANCELLED", "cancelled while queued")  # QUEUED → CANCELLED is allowed
+        if run.state == "CREATED":
+            try:
+                await deps.ctx.state("VALIDATING_INPUT")
+                await deps.ctx.state("QUEUED", "policy allowed")
+            except Exception as e:
+                log.exception("run %s failed validation", run_id)
+                await deps.ctx.state("FAILED", f"{type(e).__name__}: {e}"[:300])
+                return
+        if not await wait_for_slot(run_id, wait=wait_for_queue):
+            async with Session() as s:
+                current = await s.get(Run, run_id)
+                cancelled = current and current.state == "QUEUED" and current.cancel_requested
+            if cancelled:
+                await deps.ctx.state("CANCELLED", "cancelled while queued")
             return
         await _invoke(run_id, deps, {"run_id": run_id, "case_ids": [c.test_case_id for c in deps.cases]})
 

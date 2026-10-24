@@ -48,7 +48,7 @@ export type ApiRun = {
   passed: number; total: number; counts: Record<string, number>; duration: string; started: string; trigger: string
 }
 export type ApiFindingDetail = {
-  id: string; title: string; severity: "high" | "medium" | "low"; status: string; verdict: string; runId: string; runUuid: string; test_case_id: string
+  id: string; title: string; type: string; severity: "high" | "medium" | "low"; status: string; verdict: string; runId: string; runUuid: string; test_case_id: string
   expected: string; actual: string; repro_steps: { action: string; target?: string; value?: string }[]
   verdict_detail: { status: string; rule: string; reason?: string; reproduced: string; checks: Record<string, boolean | string>; explanation?: string }
   diagnosis: { hypotheses: { statement: string; confidence: string; supporting_evidence_ids: string[] }[]; verified_observations: string[]; unknowns: string[] } | null

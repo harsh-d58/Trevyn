@@ -63,6 +63,7 @@
   --color-cat-api: var(--cat-api);
   --color-cat-perf: var(--cat-perf);
   --color-cat-sec: var(--cat-sec);
+  --color-cat-a11y: var(--cat-a11y);
   --color-cat-compat: var(--cat-compat);
   --ease-out-soft: cubic-bezier(.22, 1, .36, 1);
 }
@@ -72,7 +73,7 @@
   --ink: #0b1a3d; --navy: #0f2557;
   --ai: #7457ea; --det: #0b8a7c; --human: #d27408;
   --ok: #15935a; --warn: #b86f05; --bad: #d03636; --urgent: #e5484d; --high: #f08c2e;
-  --cat-ui: #3b6ff5; --cat-api: #38bdf8; --cat-perf: #ff8a5b; --cat-sec: #ec6fb0; --cat-compat: #94a3b8;
+  --cat-ui: #3b6ff5; --cat-api: #38bdf8; --cat-perf: #ff8a5b; --cat-sec: #ec6fb0; --cat-a11y: #8b5cf6; --cat-compat: #94a3b8;
 
   /* wallpaper: Prism (default) — blob hues echo the legend */
   --wall-base: #eef2fa; --blob-1: #c9c1ff; --blob-2: #c3d8ff; --blob-3: #bfede2; --blob-4: #ffe0c4;

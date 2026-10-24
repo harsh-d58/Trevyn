@@ -3,7 +3,7 @@
 
 export type Provenance = "ai" | "det" | "human"
 export type Severity = "high" | "medium" | "low"
-export type FindingType = "ui" | "api" | "perf" | "security" | "compat"
+export type FindingType = "ui" | "api" | "perf" | "security" | "accessibility" | "compat"
 
 export type KpiKey = "tests_executed" | "pass_rate" | "confirmed_findings" | "regressions_prevented" | "pending_approvals"
 export type Kpi = {

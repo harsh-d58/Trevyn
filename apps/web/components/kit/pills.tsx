@@ -1,6 +1,6 @@
 // Small status primitives ported from trevyn-app/src/components/ui.jsx (Pill, Tag, Sev, Type, Status,
 // Avatar, Label) plus the glass-only PriorityTag / ProjectChip / Legend.
-import { Flag, Gauge, Globe, Layers, Plug, Shield } from "lucide-react"
+import { Accessibility, Flag, Gauge, Globe, Layers, Plug, Shield } from "lucide-react"
 import { PEOPLE, PROJECTS } from "@/lib/demo/core"
 import type { FindingType, RunStatus, Severity as SeverityLevel } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -30,9 +30,11 @@ export const Tag = ({ k }: { k: keyof typeof TAGS }) => (
 
 export const Severity = ({ s }: { s: SeverityLevel }) => <Pill tone={{ high: "bad", medium: "warn", low: "mut" }[s] as Tone}>{s[0].toUpperCase() + s.slice(1)}</Pill>
 
-const TYPE: Record<FindingType, [typeof Globe, string]> = { ui: [Globe, "UI"], api: [Plug, "API"], perf: [Gauge, "Perf"], security: [Shield, "Security"], compat: [Layers, "Compat"] }
-export const FindingTypePill = ({ t }: { t: FindingType }) => { const [I, l] = TYPE[t]; return <Pill tone="brand"><I size={12} />{l}</Pill> }
-export const typeLabel = (t: FindingType) => TYPE[t][1]
+const TYPE: Record<FindingType, [typeof Globe, string]> = { ui: [Globe, "UI"], api: [Plug, "API"], perf: [Gauge, "Perf"], security: [Shield, "Security"], accessibility: [Accessibility, "Accessibility"], compat: [Layers, "Compat"] }
+const typeInfo = (t: string | null | undefined): [typeof Globe, string] =>
+  Object.hasOwn(TYPE, t ?? "") ? TYPE[t as FindingType] : [Layers, t?.trim() || "Other"]
+export const FindingTypePill = ({ t }: { t: string | null | undefined }) => { const [I, l] = typeInfo(t); return <Pill tone="brand"><I size={12} />{l}</Pill> }
+export const typeLabel = (t: string | null | undefined) => typeInfo(t)[1]
 
 export const RUN_STATUS: Record<RunStatus, [string, string]> = {
   running: ["bg-det/12 text-det", "Live"], passed: ["bg-ok/12 text-ok", "Passed"], failed: ["bg-bad/12 text-bad", "Failed"],

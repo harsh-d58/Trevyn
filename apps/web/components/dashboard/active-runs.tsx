@@ -7,7 +7,7 @@ import { useLive } from "@/lib/live"
 import type { FindingType, RunSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const TYPE: Record<FindingType, string> = { ui: "Browser & UI", api: "API", perf: "Performance", security: "Security", compat: "Compatibility" }
+const TYPE: Record<FindingType, string> = { ui: "Browser & UI", api: "API", perf: "Performance", security: "Security", accessibility: "Accessibility", compat: "Compatibility" }
 type DashboardRun = RunSummary & { uuid?: string; state?: string }
 
 function started(value: string) {

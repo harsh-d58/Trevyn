@@ -36,10 +36,14 @@ def _run(coro):
     return asyncio.run(wrapped())
 
 
-@app.task(name="trevyn.run.execute", autoretry_for=(ConnectionError, OSError), retry_backoff=True, max_retries=2)
-def run_execute(run_id: str) -> None:
-    from .runs import execute_run
-    _run(execute_run(run_id))
+@app.task(bind=True, name="trevyn.run.execute", autoretry_for=(ConnectionError, OSError),
+          retry_backoff=True, max_retries=None, retry_kwargs={"max_retries": 2})
+def run_execute(self, run_id: str) -> None:
+    from .runs import RunSlotBusy, SLOT_POLL_SECONDS, execute_run
+    try:
+        _run(execute_run(run_id, wait_for_queue=False))
+    except RunSlotBusy as exc:
+        raise self.retry(exc=exc, countdown=SLOT_POLL_SECONDS)
 
 
 @app.task(name="trevyn.run.resume", autoretry_for=(ConnectionError, OSError), retry_backoff=True, max_retries=2)
