@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "PageMap": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "headings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Headings",
+          "type": "array"
+        },
+        "links": {
+          "default": [],
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Links",
+          "type": "array"
+        },
+        "buttons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Buttons",
+          "type": "array"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "has_login_form": {
+          "default": false,
+          "title": "Has Login Form",
+          "type": "boolean"
+        },
+        "aria_snapshot": {
+          "default": "",
+          "title": "Aria Snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "PageMap",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "start_url": {
+      "title": "Start Url",
+      "type": "string"
+    },
+    "pages": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PageMap"
+      },
+      "title": "Pages",
+      "type": "array"
+    },
+    "crawled_at": {
+      "title": "Crawled At",
+      "type": "string"
+    },
+    "truncated": {
+      "default": false,
+      "title": "Truncated",
+      "type": "boolean"
+    },
+    "errors": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Errors",
+      "type": "array"
+    }
+  },
+  "required": [
+    "start_url",
+    "crawled_at"
+  ],
+  "title": "SiteMap",
+  "type": "object"
+}

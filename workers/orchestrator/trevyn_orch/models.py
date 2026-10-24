@@ -198,8 +198,96 @@ class GeminiAdapter:
         return out, usage[0] if usage else Usage(node=kw["node"], provider="google", model=self._model(kw["node"]))
 
 
+class OpenAICompatAdapter:
+    """Any OpenAI-compatible gateway (OpenRouter, Together, Groq, a local server…): one key, many models.
+    MODEL_PROVIDER=openrouter|openai_compat, LLM_API_KEY, LLM_BASE_URL, and one model per node (LLM_MODEL_PLANNER, …).
+    Plain httpx, no SDK. Model output is validated against the Pydantic schema; a bad reply falls back to rules."""
+
+    NODES = ("planner", "diagnostician", "fix", "assistant")
+
+    def __init__(self) -> None:
+        self.key = os.getenv("LLM_API_KEY", "")
+        self.base = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+        default = os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
+        self.models = {n: os.getenv(f"LLM_MODEL_{n.upper()}", default) for n in self.NODES}
+
+    @property
+    def available(self) -> bool:
+        return bool(self.key)
+
+    def _headers(self) -> dict:
+        if not self.key:
+            raise ModelUnavailable("no LLM_API_KEY")
+        return {"Authorization": f"Bearer {self.key}", "HTTP-Referer": "https://github.com/harshgitty58/Trevyn", "X-Title": "Trevyn"}
+
+    def _usage(self, node: str, model: str, data: dict, t0: float) -> Usage:
+        u = data.get("usage") or {}
+        return Usage(node=node, provider="openai_compat", model=model, input_tokens=u.get("prompt_tokens", 0) or 0,
+                     output_tokens=u.get("completion_tokens", 0) or 0, latency_ms=int((time.monotonic() - t0) * 1000),
+                     cost_usd=round(float(u.get("cost", 0) or 0), 5))
+
+    async def structured(self, *, node: str, system: str, stable: list[str], prompt: str, schema: type[T],
+                         effort: str = "high") -> tuple[T, Usage]:
+        import json
+
+        import httpx
+        from pydantic import ValidationError
+        model, t0 = self.models[node], time.monotonic()
+        js = schema.model_json_schema()
+        messages = [{"role": "system", "content": "\n\n".join([system, *stable, "Reply with JSON only, matching this JSON Schema:\n" + json.dumps(js)])},
+                    {"role": "user", "content": prompt}]
+        body = {"model": model, "messages": messages, "response_format": {"type": "json_schema", "json_schema": {"name": schema.__name__, "schema": js}}}
+        try:
+            async with httpx.AsyncClient(timeout=180) as c:
+                r = await c.post(f"{self.base}/chat/completions", json=body, headers=self._headers())
+                if r.status_code == 400:  # model without schema support: plain JSON mode
+                    body["response_format"] = {"type": "json_object"}
+                    r = await c.post(f"{self.base}/chat/completions", json=body, headers=self._headers())
+                r.raise_for_status()
+                data = r.json()
+        except httpx.HTTPError as e:
+            raise ModelUnavailable(f"{type(e).__name__}: {e}") from e
+        text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        try:
+            return schema.model_validate_json(text), self._usage(node, model, data, t0)
+        except ValidationError as e:
+            raise ModelUnavailable(f"{model} reply did not match the schema: {e.error_count()} errors") from e
+
+    async def stream_text(self, *, node: str, system: str, stable: list[str], messages: list[dict],
+                          effort: str = "medium", usage_out: list | None = None) -> AsyncIterator[str]:
+        import json
+
+        import httpx
+        model, t0, last = self.models[node], time.monotonic(), {}
+        body = {"model": model, "stream": True, "stream_options": {"include_usage": True},
+                "messages": [{"role": "system", "content": "\n\n".join([system, *stable])}] + [m for m in messages if isinstance(m.get("content"), str)]}
+        try:
+            async with httpx.AsyncClient(timeout=180) as c, c.stream("POST", f"{self.base}/chat/completions", json=body, headers=self._headers()) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.startswith("data: ") or line == "data: [DONE]":
+                        continue
+                    chunk = json.loads(line[6:])
+                    last = chunk if chunk.get("usage") else last
+                    for ch in chunk.get("choices") or []:
+                        if t := (ch.get("delta") or {}).get("content"):
+                            yield t
+        except httpx.HTTPError as e:
+            raise ModelUnavailable(f"{type(e).__name__}: {e}") from e
+        if usage_out is not None:
+            usage_out.append(self._usage(node, model, last, t0))
+
+    async def text(self, **kw) -> tuple[str, Usage]:
+        usage: list[Usage] = []
+        out = "".join([t async for t in self.stream_text(usage_out=usage, **kw)])
+        return out, usage[0] if usage else Usage(node=kw["node"], provider="openai_compat", model=self.models[kw["node"]])
+
+
 def _pick():
     provider = os.getenv("MODEL_PROVIDER", "").lower()
+    if provider in ("openrouter", "openai_compat") or (not provider and os.getenv("LLM_API_KEY")):
+        return OpenAICompatAdapter()
     if provider == "gemini" or (not provider and (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))):
         return GeminiAdapter()
     return AnthropicAdapter()

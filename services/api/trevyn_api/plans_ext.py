@@ -6,12 +6,12 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trevyn_contracts import PlanDraft, TestCase
+from trevyn_contracts import PlanDraft, SiteMap, TestCase
 from trevyn_orch import planner
 
 from . import runs
 from .common import Problem, get_or_404
-from .db import Plan, Project, Run, session
+from .db import Environment, Plan, Project, Run, SiteMapRecord, session
 
 router = APIRouter()
 
@@ -46,12 +46,17 @@ async def edit_plan(plan_id: str, body: PlanEdit, s: AsyncSession = Depends(sess
             cases.append(TestCase.model_validate(raw))
         except ValidationError as e:
             errors += [f"case {i + 1}: {'.'.join(map(str, x['loc']))}: {x['msg']}" for x in e.errors()]
+    env = await s.get(Environment, old.environment_id)
+    snapshot = await s.get(SiteMapRecord, old.site_map_id) if old.site_map_id else None
     if not errors:
-        errors = planner.validate(PlanDraft(test_cases=cases), proj.allowed_domains)
+        errors = planner.validate(PlanDraft(test_cases=cases), proj.allowed_domains,
+                                  site_map=SiteMap.model_validate(snapshot.content) if snapshot else None,
+                                  has_hook=bool(env.hook_url))
     if errors:
         raise Problem(422, "validation_error", "; ".join(errors[:8]))
     latest = max((p.version for p in (await s.scalars(select(Plan).where(Plan.project_id == old.project_id, Plan.requirement == old.requirement))).all()), default=old.version)
     new = Plan(project_id=old.project_id, environment_id=old.environment_id, requirement=old.requirement, test_mode=old.test_mode, source="edited",
+               site_map_id=old.site_map_id,
                version=latest + 1, parent_plan_id=old.id, status="candidate", stack_hypotheses=old.stack_hypotheses,
                risk_level=max((c.risk for c in cases), key=["low", "medium", "high"].index),
                test_cases=[c.model_dump(exclude_none=True) for c in cases])

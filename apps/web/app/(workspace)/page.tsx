@@ -34,8 +34,8 @@ async function Live({ demo }: { demo: DashboardSummary }) {
 function Body({ s, live }: { s: DashboardSummary; live: boolean }) {
   return (
     <Stagger className="grid gap-3.5">
-      <Item><Greeting /></Item>
-      <Item className="flex flex-wrap items-center justify-between gap-3"><SectionTabs /><StatPills /></Item>
+      <Item className="md:hidden"><Greeting /></Item>
+      <Item className="flex flex-wrap items-center justify-between gap-3"><span className="md:hidden"><SectionTabs /></span><span className="ml-auto"><StatPills /></span></Item>
       <Item><KpiRow kpis={s.kpis} /></Item>
       <div className="grid gap-3.5 lg:grid-cols-2 xl:grid-cols-12">
         <Item className="lg:col-span-2 xl:col-span-5"><HeroReadiness gate={s.gate} /></Item>

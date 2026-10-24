@@ -112,10 +112,6 @@ function RailView({ path }: { path: string | null }) {
   const current = activeHref(path, HREFS)
   return (
     <nav aria-label="Main" className="fixed top-3 bottom-3 left-3 z-40 hidden w-14 flex-col items-center gap-2.5 md:flex">
-      <Link href="/" aria-label="Trevyn home" className="group press glass-2 relative grid size-14 place-items-center rounded-full outline-none">
-        <span className="grid size-9 place-items-center rounded-[11px] bg-[linear-gradient(135deg,var(--brand),var(--ai)_45%,var(--det)_80%,var(--human))] font-display text-[19px] text-white shadow-[inset_0_1px_0_rgb(255_255_255/.4)]">T</span>
-      <HoverLabel label="Trevyn" hint="Home" />
-      </Link>
       <div className="glass-2 flex flex-col items-center gap-1 rounded-full p-2">
         {RAIL_MAIN.map((x) => isGroup(x)
           ? <RailGroup key={x.label} group={x} current={current} />
