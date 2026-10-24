@@ -1,0 +1,15 @@
+{
+  "site": [{
+    "@name": "https://example.test",
+    "alerts": [
+      {"pluginid": "10038", "alert": "Content Security Policy (CSP) Header Not Set",
+       "riskcode": "2", "riskdesc": "Medium (High)", "confidence": "High", "cweid": "693", "wascid": "15",
+       "instances": [{"uri": "https://example.test/"}, {"uri": "https://example.test/account?token=secret"}]},
+      {"pluginid": "10020", "alert": "X-Frame-Options Header Not Set",
+       "riskcode": "2", "confidence": "Medium", "cweid": "1021", "wascid": "15",
+       "instances": [{"uri": "https://example.test/"}]},
+      {"pluginid": "99999", "alert": "External host",
+       "riskcode": "3", "instances": [{"uri": "https://outside.test/"}]}
+    ]
+  }]
+}

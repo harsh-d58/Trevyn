@@ -1,0 +1,1 @@
+[{"path":"/","violations":[{"id":"color-contrast","impact":"serious","help":"Elements must meet minimum color contrast ratio thresholds","helpUrl":"https://dequeuniversity.com/rules/axe/4.14/color-contrast","tags":["wcag2aa","wcag143"],"nodes":2}]}]

@@ -131,7 +131,7 @@ export function Island() {
                 </ul>
                 <div className="mt-auto flex gap-2 pt-3">
                   <Link href={run?.uuid ? `/runs/live?run=${run.uuid}` : "/runs/live"} onClick={() => setOpen(false)} className="press pulse pulse-on-dark rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-ink">Open run</Link>
-                  {run?.state === "gate" && !run.uuid && (
+                  {run?.state === "gate" && (
                     <button onClick={() => store.approveGate()} className="press pulse pulse-on-dark rounded-full bg-[#f7ae47] px-3 py-1.5 text-[12px] font-semibold text-ink">Approve tests</button>
                   )}
                   <button onClick={() => store.toggleMute()} className="press pulse pulse-on-dark inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-[12px] font-medium hover:bg-white/15">

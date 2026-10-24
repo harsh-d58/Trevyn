@@ -42,6 +42,10 @@ TOPOLOGY: list[dict] = [
     {"id": "execute", "label": "Execute", "detail": "Lanes run in parallel", "lanes": [
         {"id": "lane_ui", "lane": "ui", "label": "UI · Playwright"},
         {"id": "lane_passive", "lane": "security_passive", "label": "Security · passive checks"},
+        {"id": "lane_zap", "lane": "security_zap", "label": "Security · ZAP baseline"},
+        {"id": "lane_compat", "lane": "compat", "label": "Compatibility · browsers"},
+        {"id": "lane_repo", "lane": "repo", "label": "Repository · OSV and Gitleaks", "modes": ["gray_box"]},
+        {"id": "lane_performance", "lane": "performance", "label": "Performance · Lighthouse"},
     ]},
     {"id": "verify", "label": "Verify", "detail": "Deterministic verdicts", "children": [
         {"id": "verify.collect", "label": "Collect evidence"},
@@ -76,6 +80,8 @@ class Deps:
     mode: str = "black_box"
     site_paths: list[str] = field(default_factory=list)
     repo_files: int = 0
+    repo_url: str | None = None
+    repo_sha: str | None = None
     results: list[tuple[TestCase, CaseResult]] = field(default_factory=list)  # lane_ui → verify, same invocation
     published: dict[str, str] = field(default_factory=dict)  # screenshot path → evidence id
     issues: list[passive.Issue] = field(default_factory=list)  # passive lane + traffic checks → verify.record
@@ -143,7 +149,8 @@ async def gate(state: RunState, runtime: Runtime[Deps]) -> dict:
 def after_gate(state: RunState):
     if state["next"] < len(state["case_ids"]):
         return "gate"
-    return [Send("lane_ui", state), Send("lane_passive", state)]  # parallel lanes (PLAN_MODES §4.4)
+    return [Send("lane_ui", state), Send("lane_passive", state), Send("lane_zap", state),
+            Send("lane_compat", state), Send("lane_repo", state), Send("lane_performance", state)]
 
 
 @node("lane_ui")
@@ -161,6 +168,37 @@ async def lane_passive(state: RunState, runtime: Runtime[Deps]) -> dict:
     d = runtime.context
     d.issues.extend(await pl.passive_lane(d.ctx, d.target, d.site_paths))
     return {"lanes": {"security_passive": "done"}}
+
+
+@node("lane_zap")
+async def lane_zap(state: RunState, runtime: Runtime[Deps]) -> dict:
+    d = runtime.context
+    d.issues.extend(await pl.zap_lane(d.ctx, d.target))
+    return {"lanes": {"security_zap": "done"}}
+
+
+@node("lane_compat")
+async def lane_compat(state: RunState, runtime: Runtime[Deps]) -> dict:
+    d = runtime.context
+    try:
+        await pl.compat_lane(d.ctx, [d.case(c) for c in state["approved"]], d.target)
+    except Exception as exc:
+        await pl.lane(d.ctx, "compat", 1, 1, "warn", f"Compatibility unavailable: {type(exc).__name__}")
+    return {"lanes": {"compat": "done"}}
+
+
+@node("lane_repo")
+async def lane_repo(state: RunState, runtime: Runtime[Deps]) -> dict:
+    d = runtime.context
+    d.issues.extend(await pl.repo_lane(d.ctx, d.repo_url if d.mode == "gray_box" else None, d.repo_sha))
+    return {"lanes": {"repo": "done"}}
+
+
+@node("lane_performance")
+async def lane_performance(state: RunState, runtime: Runtime[Deps]) -> dict:
+    d = runtime.context
+    d.issues.extend(await pl.performance_lane(d.ctx, d.target, d.site_paths))
+    return {"lanes": {"performance": "done"}}
 
 
 @node("report")
@@ -215,7 +253,32 @@ async def verify_classify(state: RunState, runtime: Runtime[Deps]) -> dict:
 @node("verify.traffic")
 async def verify_traffic(state: RunState, runtime: Runtime[Deps]) -> dict:
     d = runtime.context
+    from .axe import parse_report as parse_axe
+    from .lighthouse import parse_vitals
+    import json
+    for tc, case in d.results:
+        axe_path = case.artefacts.get("axe")
+        if axe_path:
+            try:
+                issues = parse_axe(json.loads(Path(axe_path).read_text(encoding="utf-8")))
+                axe_evidence = [eid for eid, kind in d.evidence.get(tc.test_case_id, {}).items() if kind == "axe"]
+                for issue in issues:
+                    issue.evidence_ids.extend(axe_evidence)
+                d.issues.extend(issues)
+            except (OSError, ValueError, TypeError):
+                await pl.lane(d.ctx, "accessibility", 1, 1, "warn", f"axe report unavailable for {tc.test_case_id}")
+        vitals_path = case.artefacts.get("web_vitals")
+        if vitals_path:
+            try:
+                _rows, vital_issues = parse_vitals(json.loads(Path(vitals_path).read_text(encoding="utf-8")))
+                vital_evidence = [eid for eid, kind in d.evidence.get(tc.test_case_id, {}).items() if kind == "web_vitals"]
+                for issue in vital_issues:
+                    issue.evidence_ids.extend(vital_evidence)
+                d.issues.extend(vital_issues)
+            except (OSError, ValueError, TypeError):
+                await pl.lane(d.ctx, "performance", 1, 1, "warn", f"web-vitals unavailable for {tc.test_case_id}")
     extra = pl.traffic_issues(d.results, d.target)
+    await pl.record_traffic_summary(d.ctx, d.results, extra)
     d.issues.extend(extra)
     await d.ctx.log("det", "log", f"Network and console checks: {len(extra)} issues")
     return {}
@@ -249,13 +312,17 @@ def build(checkpointer=None):
     g.add_node("gate", gate)
     g.add_node("lane_ui", lane_ui)
     g.add_node("lane_passive", lane_passive)
+    g.add_node("lane_zap", lane_zap)
+    g.add_node("lane_compat", lane_compat)
+    g.add_node("lane_repo", lane_repo)
+    g.add_node("lane_performance", lane_performance)
     g.add_node("verify", build_verify())
     g.add_node("report", report)
     g.add_edge(START, "intake")
     g.add_edge("intake", "recon")
     g.add_edge("recon", "gate")
-    g.add_conditional_edges("gate", after_gate, ["gate", "lane_ui", "lane_passive"])
-    g.add_edge(["lane_ui", "lane_passive"], "verify")  # join: verify runs once both lanes finish
+    g.add_conditional_edges("gate", after_gate, ["gate", "lane_ui", "lane_passive", "lane_zap", "lane_compat", "lane_repo", "lane_performance"])
+    g.add_edge(["lane_ui", "lane_passive", "lane_zap", "lane_compat", "lane_repo", "lane_performance"], "verify")
     g.add_edge("verify", "report")
     g.add_edge("report", END)
     return g.compile(checkpointer=checkpointer)

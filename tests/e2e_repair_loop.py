@@ -16,6 +16,9 @@ def wait(c, run_id, timeout=300):
         r = c.get(f"/api/runs/{run_id}").json()
         if r["state"] in ("COMPLETED", "FAILED", "CANCELLED", "BLOCKED"):
             return r
+        if r["state"] == "AWAITING_APPROVAL":  # AI plans mark checkout cases high-risk; approve them, in the test only
+            for a in c.get("/api/approvals", params={"run": run_id}).json()["items"]:
+                c.post(f"/api/approvals/{a['id']}/decision", json={"approve": True, "reason": "e2e"})
         time.sleep(1)
     sys.exit(f"FAIL: {run_id} did not finish")
 

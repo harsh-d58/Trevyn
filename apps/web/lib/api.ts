@@ -44,7 +44,7 @@ export type ApiEvent = {
   status: string | null; data: Record<string, unknown>; evidence_refs: string[]
 }
 export type ApiRun = {
-  id: string; uuid: string; name: string; state: string; status: "running" | "passed" | "failed" | "warn" | "stopped"
+  id: string; uuid: string; project_id: string; name: string; state: string; status: "running" | "passed" | "failed" | "warn" | "stopped"
   passed: number; total: number; counts: Record<string, number>; duration: string; started: string; trigger: string
 }
 export type ApiFindingDetail = {

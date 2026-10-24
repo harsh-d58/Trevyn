@@ -5,10 +5,14 @@ import { PageHeader } from "@/components/kit/page-header"
 import { Pill, Severity } from "@/components/kit/pills"
 import { API_URL, type ApiFindingDetail } from "@/lib/api"
 import { RepairPanel } from "./repair-panel"
+import { FlowMap } from "@/components/charts/flow-map"
 
 const STATUS_TONE = { confirmed: "bad", needs_review: "warn", inconclusive: "mut" } as const
 
-export function RealFindingView({ f }: { f: ApiFindingDetail }) {
+type Journey = { nodes: { id: string; label: string; sub: string; x: number; y: number; k?: "det" | "bad" }[];
+  edges: { from: string; to: string; k?: "mut" }[]; w: number; h: number }
+
+export function RealFindingView({ f, journey }: { f: ApiFindingDetail; journey?: Journey | null }) {
   const shots = f.evidence_items.filter((e) => e.kind === "screenshot_failure" || e.kind === "screenshot")
   const files = f.evidence_items.filter((e) => !e.kind.startsWith("screenshot"))
   const v = f.verdict_detail
@@ -16,6 +20,7 @@ export function RealFindingView({ f }: { f: ApiFindingDetail }) {
     <div className="grid gap-4">
       <PageHeader eyebrow={`${f.id} · ${f.test_case_id} · ${f.runId}`} title={f.title}><Severity s={f.severity} /><Pill tone={STATUS_TONE[f.status as keyof typeof STATUS_TONE] ?? "mut"}>{f.status}</Pill>
           <Link href={`/runs/live?run=${f.runUuid}`}><Pill tone="brand">Open run</Pill></Link></PageHeader>
+      {journey?.nodes.length ? <Card title={`Journey · ${f.test_case_id}`}><div className="h-[320px]"><FlowMap nodes={journey.nodes} edges={journey.edges} w={journey.w} h={journey.h} label="Test journey" /></div></Card> : null}
       <div className="grid gap-4 xl:grid-cols-[1fr_1.4fr]">
         <div className="grid content-start gap-4">
           <Card title="Expected vs actual">

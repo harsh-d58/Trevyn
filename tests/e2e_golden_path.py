@@ -22,7 +22,7 @@ with httpx.Client(base_url=API, timeout=300) as c:
         for e in c.get(f"/api/runs/{run['id']}/events", params={"after_seq": seq}).json()["items"]:
             seq = e["seq"]
             print(f"  {e['seq']:>3} {e['actor']:<5} {e['event_type']:<10} {e['summary']}")
-            if e["event_type"] == "gate":  # auto-approve in the test only
+            if e["event_type"] == "gate" and e["data"].get("approval_id"):  # auto-approve each opened gate, in the test only
                 c.post(f"/api/approvals/{e['data']['approval_id']}/decision", json={"approve": True, "reason": "e2e"})
         if c.get(f"/api/runs/{run['id']}").json()["state"] in ("COMPLETED", "FAILED", "CANCELLED", "BLOCKED"):
             break

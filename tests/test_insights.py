@@ -105,3 +105,19 @@ async def test_project_history(seeded):
     assert cases["T-1"]["latest"] == "passed"
     assert cases["T-2"]["latest"] == "passed"
     assert cases["T-3"]["latest"] == "inconclusive"
+
+
+async def test_every_insight_follows_one_run(seeded):
+    """?run= narrows overview, analytics, network and findings to that run; a run with no findings shows zeros."""
+    from sqlalchemy import select
+    async with Session() as s:
+        r1, r2 = (await s.scalars(select(Run).where(Run.project_id == seeded).order_by(Run.started_at))).all()
+    a1 = (await get(f"/api/insights/analytics?run={r1.id}")).json()
+    assert a1["flow"]["detected"] == 2 and a1["scope"]["run"] == r1.display_id
+    assert (await get(f"/api/insights/analytics?run={r2.display_id}")).json()["flow"]["detected"] == 0
+    assert {f["runUuid"] for f in (await get(f"/api/findings?run={r1.id}")).json()["items"]} == {r1.id}
+    assert (await get(f"/api/findings?run={r2.id}")).json()["items"] == []
+    ov = (await get(f"/api/dashboard/overview?run={r1.id}")).json()
+    assert ov["gate"]["release"] == r1.display_id and ov["loop"]["prove"] == [1, 2]
+    assert (await get(f"/api/insights/network?run={r2.id}")).json()["files"] == 0
+    assert (await get("/api/insights/analytics?run=nope")).status_code == 404

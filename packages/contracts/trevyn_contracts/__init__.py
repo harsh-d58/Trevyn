@@ -55,8 +55,9 @@ class PageMap(BaseModel):
     title: str = ""
     headings: list[str] = []
     links: list[dict[str, str]] = []
-    buttons: list[str] = []
-    fields: list[dict] = []
+    buttons: list[str] = []  # visible when scanned
+    hidden_buttons: list[str] = []  # in the page but hidden until an action reveals them
+    fields: list[dict] = []  # {label, type, required, visible}
     has_login_form: bool = False
     aria_snapshot: str = ""
 
@@ -85,6 +86,8 @@ class RunnerJob(BaseModel):
     test_cases: list[TestCase]
     browser: str = "chromium"
     headless: bool = True
+    viewport: dict[str, int] | None = None
+    mobile: bool = False
     out_dir: str
 
 
@@ -95,6 +98,7 @@ class StepResult(BaseModel):
     t_ms: int
     error: str | None = None
     screenshot: str | None = None
+    navigation: dict | None = None  # browser performance timings for goto; absent on older runs
 
 
 class AssertionResult(BaseModel):
@@ -134,6 +138,7 @@ class RunnerResult(BaseModel):
     runner_version: str = "trevyn-runner-py@0.1.0"
     started_at: str = ""
     ended_at: str = ""
+    environment: dict | None = None
 
 
 # ---- verifier output (Part 11) ----

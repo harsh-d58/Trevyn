@@ -1,0 +1,1 @@
+{"rows":[{"case":"TC-1","browser":"firefox","status":"passed","note":""},{"case":"TC-1","browser":"webkit","status":"failed","note":"assertion failed"},{"case":"TC-2","browser":"iPhone 13","status":"not run","note":"side effects or risk"}]}

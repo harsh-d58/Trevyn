@@ -1,0 +1,1 @@
+[{"path":"/","metrics":{"LCP":{"name":"LCP","value":2600,"rating":"needs-improvement"},"CLS":{"name":"CLS","value":0.08,"rating":"good"},"TTFB":{"name":"TTFB","value":500,"rating":"good"}}}]

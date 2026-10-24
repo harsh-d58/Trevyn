@@ -2,6 +2,7 @@
 Charts the backend cannot compute yet (top suites, throughput, week strip, loop rings) are not returned."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .common import Problem
+from . import storage
 from .db import Approval, Evidence, Finding, ModelCall, Plan, PolicyDecision, Repair, Run, RunEvent, session
 
 router = APIRouter()
@@ -22,6 +24,19 @@ LABELS = {"ui": "UI", "api": "API", "perf": "Performance", "security": "Security
 
 def _aware(d: datetime) -> datetime:
     return d if d.tzinfo else d.replace(tzinfo=UTC)
+
+
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+async def _scope(s: AsyncSession, run: str | None) -> Run | None:
+    """`?run=` on any insight endpoint: a run uuid or display id narrows every number to that run."""
+    if not run:
+        return None
+    found = await s.get(Run, run) or await s.scalar(select(Run).where(Run.display_id == run))
+    if not found:
+        raise Problem(404, "not_found", f"Run {run} not found")
+    return found
 
 
 def _pct(cur: float, prev: float) -> float:
@@ -38,13 +53,16 @@ def _tally(runs: list[Run], lo: datetime, hi: datetime) -> tuple[int, int, int]:
 
 
 @router.get("/api/dashboard/overview")
-async def overview(s: AsyncSession = Depends(session)):
+async def overview(run: str | None = None, s: AsyncSession = Depends(session)):
+    scoped = await _scope(s, run)
     now = datetime.now(UTC)
-    week, prev = now - timedelta(days=7), now - timedelta(days=14)
-    runs = (await s.scalars(select(Run))).all()
-    findings = (await s.scalars(select(Finding))).all()
-    repairs = (await s.scalars(select(Repair))).all()
-    pending = len((await s.scalars(select(Approval).where(Approval.status == "pending"))).all())
+    # one run: its whole life counts, with no week-over-week comparison
+    week, prev = (EPOCH, EPOCH) if scoped else (now - timedelta(days=7), now - timedelta(days=14))
+    runs = [scoped] if scoped else (await s.scalars(select(Run))).all()
+    findings = (await s.scalars(select(Finding).where(Finding.run_id == scoped.id) if scoped else select(Finding))).all()
+    repairs = (await s.scalars(select(Repair).where(Repair.finding_id.in_([f.id for f in findings])) if scoped else select(Repair))).all()
+    pq = select(Approval).where(Approval.status == "pending")
+    pending = len((await s.scalars(pq.where(Approval.subject_id == scoped.id) if scoped else pq)).all())
 
     (p1, f1, i1), (p0, f0, i0) = _tally(runs, week, now + timedelta(days=1)), _tally(runs, prev, week)
     ex1, ex0 = p1 + f1 + i1, p0 + f0 + i0
@@ -77,19 +95,25 @@ async def overview(s: AsyncSession = Depends(session)):
         sel = [f for f in findings if f.category == t]
         if sel:
             cats.append({"type": t, "label": label, "count": len(sel), "high": sum(1 for f in sel if f.severity == "high")})
-    return {"kpis": kpis, "runHealth": health, "categories": cats, "loop": await _loop(s, now),
+    return {"kpis": kpis, "runHealth": health, "categories": cats, "loop": await _loop(s, now, scoped),
             "runsToday": sum(1 for r in runs if _aware(r.started_at).date() == now.date()),
             "gate": {"passRate": round(rate1, 1), "gate": float(os.getenv("RELEASE_GATE", "90")), "passed": p1, "failed": f1 + i1,
-                     "release": "Last 7 days", "scope": "All projects", "weekDelta": round(rate1 - rate0, 1) if ex0 else 0.0}}
+                     "release": scoped.display_id if scoped else "Last 7 days", "scope": f"{scoped.display_id} · {scoped.name}" if scoped else "All projects", "weekDelta": round(rate1 - rate0, 1) if ex0 else 0.0}}
 
 
-async def _loop(s: AsyncSession, now: datetime) -> dict:
-    """Today's rings (UTC day): plan = cases in plans approved / created; prove = failures confirmed / found;
-    decide = approvals decided / opened."""
-    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    plans = (await s.scalars(select(Plan).where(Plan.created_at >= day))).all()
-    found = (await s.scalars(select(Finding).where(Finding.created_at >= day))).all()
-    opened = (await s.scalars(select(Approval).where(Approval.created_at >= day))).all()
+async def _loop(s: AsyncSession, now: datetime, scoped: Run | None = None) -> dict:
+    """Today's rings (UTC day), or one run's: plan = cases in plans approved / created; prove = failures confirmed /
+    found; decide = approvals decided / opened."""
+    if scoped:
+        plan = await s.get(Plan, scoped.plan_id)
+        plans = [plan] if plan else []
+        found = (await s.scalars(select(Finding).where(Finding.run_id == scoped.id))).all()
+        opened = (await s.scalars(select(Approval).where(Approval.subject_id == scoped.id))).all()
+    else:
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        plans = (await s.scalars(select(Plan).where(Plan.created_at >= day))).all()
+        found = (await s.scalars(select(Finding).where(Finding.created_at >= day))).all()
+        opened = (await s.scalars(select(Approval).where(Approval.created_at >= day))).all()
     return {"plan": [sum(len(p.test_cases or []) for p in plans if p.status == "approved"), sum(len(p.test_cases or []) for p in plans)],
             "prove": [sum(1 for f in found if f.status == "confirmed"), len(found)],
             "decide": [sum(1 for a in opened if a.status != "pending"), len(opened)]}
@@ -102,11 +126,13 @@ _STATUS_OUTCOME = {"ok": "passed", "failed": "failed", "warn": "failed", "inconc
 
 
 @router.get("/api/insights/analytics")
-async def analytics(s: AsyncSession = Depends(session)):
-    findings = (await s.scalars(select(Finding))).all()
-    repairs = (await s.scalars(select(Repair))).all()
-    calls = (await s.scalars(select(ModelCall))).all()
-    denials = len((await s.scalars(select(PolicyDecision).where(PolicyDecision.allow.is_(False)))).all())
+async def analytics(run: str | None = None, s: AsyncSession = Depends(session)):
+    scoped = await _scope(s, run)
+    findings = (await s.scalars(select(Finding).where(Finding.run_id == scoped.id) if scoped else select(Finding))).all()
+    repairs = (await s.scalars(select(Repair).where(Repair.finding_id.in_([f.id for f in findings])) if scoped else select(Repair))).all()
+    calls = (await s.scalars(select(ModelCall).where(ModelCall.run_id == scoped.id) if scoped else select(ModelCall))).all()
+    dq = select(PolicyDecision).where(PolicyDecision.allow.is_(False))
+    denials = len((await s.scalars(dq.where(PolicyDecision.subject_id == scoped.id) if scoped else dq)).all())
 
     verified_at: dict[str, datetime] = {}
     repaired: set[str] = set()
@@ -151,14 +177,15 @@ async def analytics(s: AsyncSession = Depends(session)):
             "totalCostUsd": round(sum(c.cost_usd or 0.0 for c in calls), 6), "policyDenials": denials,
             "byType": [{"type": t, "label": LABELS.get(t, t), "count": n} for t, n in
                        sorted(Counter(f.category or "ui" for f in findings).items(), key=lambda x: -x[1])],
-            "passRate30": await _pass_rate(s, 30), "flaky": await _flaky(s), "evidence": await _evidence(s, findings),
-            "diagnoses": await _diagnoses(s)}
+            "passRate30": await _pass_rate(s, 30, scoped), "flaky": await _flaky(s, scoped=scoped),
+            "evidence": await _evidence(s, findings, scoped=scoped), "diagnoses": await _diagnoses(s, scoped),
+            "scope": {"run": scoped.display_id, "uuid": scoped.id, "name": scoped.name} if scoped else None}
 
 
-async def _pass_rate(s: AsyncSession, days: int) -> list[dict]:
+async def _pass_rate(s: AsyncSession, days: int, scoped: Run | None = None) -> list[dict]:
     """Daily pass rate over verified cases; null on days without runs (the chart leaves a gap, not a zero)."""
     now = datetime.now(UTC)
-    runs = (await s.scalars(select(Run).where(Run.started_at >= now - timedelta(days=days)))).all()
+    runs = [scoped] if scoped else (await s.scalars(select(Run).where(Run.started_at >= now - timedelta(days=days)))).all()
     out = []
     for i in range(days):
         d = (now - timedelta(days=days - 1 - i)).date()
@@ -167,9 +194,13 @@ async def _pass_rate(s: AsyncSession, days: int) -> list[dict]:
     return out
 
 
-async def _flaky(s: AsyncSession, window: int = 10) -> list[dict]:
-    """Cases that both passed and failed across their last `window` runs. Rate = the rarer outcome's share."""
+async def _flaky(s: AsyncSession, window: int = 10, scoped: Run | None = None) -> list[dict]:
+    """Cases that both passed and failed across their last `window` runs. Rate = the rarer outcome's share.
+    Scoped to a run: only that run's cases, judged on their history across all runs."""
     evs = (await s.scalars(select(RunEvent).where(RunEvent.event_type == "verdict").order_by(RunEvent.ts))).all()
+    if scoped:
+        mine = {m.group(1) for e in evs if e.run_id == scoped.id and (m := _CASE_RE.match(e.summary or ""))}
+        evs = [e for e in evs if (m := _CASE_RE.match(e.summary or "")) and m.group(1) in mine]
     per: dict[str, list[str]] = defaultdict(list)
     for e in evs:
         m = _CASE_RE.match(e.summary or "")
@@ -184,13 +215,13 @@ async def _flaky(s: AsyncSession, window: int = 10) -> list[dict]:
     return sorted(rows, key=lambda r: -r["rate"])[:8]
 
 
-async def _evidence(s: AsyncSession, findings: list[Finding], top: int = 5) -> dict:
+async def _evidence(s: AsyncSession, findings: list[Finding], top: int = 5, scoped: Run | None = None) -> dict:
     """Claim → evidence network: the newest proven or uncertain findings and the evidence kinds behind each."""
     picked = sorted([f for f in findings if f.status in ("confirmed", "needs_review") and f.evidence_ids],
                     key=lambda f: _aware(f.created_at), reverse=True)[:top]
     ids = [i for f in picked for i in f.evidence_ids]
     kind = {e.id: e.kind for e in (await s.scalars(select(Evidence).where(Evidence.id.in_(ids)))).all()} if ids else {}
-    all_kinds = Counter(e.kind for e in (await s.scalars(select(Evidence))).all())
+    all_kinds = Counter(e.kind for e in (await s.scalars(select(Evidence).where(Evidence.run_id == scoped.id) if scoped else select(Evidence))).all())
     return {"findings": [{"id": f.display_id, "title": f.title, "status": f.status, "severity": f.severity,
                           "kinds": dict(Counter(kind[i] for i in f.evidence_ids if i in kind))} for f in picked],
             "kinds": dict(all_kinds.most_common(6)),
@@ -198,34 +229,86 @@ async def _evidence(s: AsyncSession, findings: list[Finding], top: int = 5) -> d
             "uncertain": sum(1 for f in findings if f.status in ("needs_review", "inconclusive"))}
 
 
-async def _diagnoses(s: AsyncSession) -> dict:
-    evs = (await s.scalars(select(RunEvent).where(RunEvent.event_type == "diagnosis"))).all()
+async def _diagnoses(s: AsyncSession, scoped: Run | None = None) -> dict:
+    q = select(RunEvent).where(RunEvent.event_type == "diagnosis")
+    evs = (await s.scalars(q.where(RunEvent.run_id == scoped.id) if scoped else q)).all()
     return {"total": len(evs), "ai": sum(1 for e in evs if e.actor == "ai")}
 
 
-def _read_network(uri: str) -> list[dict]:
-    if not uri or uri.startswith("s3://"):
-        return []
-    p = Path(uri)
-    if not p.is_file():
+async def _read_network(uri: str) -> list[dict]:
+    if not uri:
         return []
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if uri.startswith("s3://"):
+            if not storage.s3_enabled():
+                return []
+            bucket, key = storage._split(uri)
+            response = await asyncio.to_thread(storage._client().get_object, Bucket=bucket, Key=key)
+            data = json.loads(await asyncio.to_thread(response["Body"].read))
+        else:
+            data = json.loads(Path(uri).read_text(encoding="utf-8"))
+    except Exception:  # evidence may have expired or the remote object store may be unavailable
         return []
     return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
 
 
+async def _read_har(uri: str) -> list[dict]:
+    """Use HAR timings and status when available; the runner removes headers and bodies."""
+    if not uri:
+        return []
+    try:
+        if uri.startswith("s3://"):
+            if not storage.s3_enabled():
+                return []
+            bucket, key = storage._split(uri)
+            response = await asyncio.to_thread(storage._client().get_object, Bucket=bucket, Key=key)
+            data = json.loads(await asyncio.to_thread(response["Body"].read))
+        else:
+            data = json.loads(Path(uri).read_text(encoding="utf-8"))
+        entries = data["log"]["entries"]
+        first = datetime.fromisoformat(entries[0]["startedDateTime"].replace("Z", "+00:00")) if entries else None
+        rows = []
+        from urllib.parse import urlparse
+        for entry in entries:
+            request, response = entry.get("request", {}), entry.get("response", {})
+            started = datetime.fromisoformat(entry["startedDateTime"].replace("Z", "+00:00"))
+            url = str(request.get("url") or "")
+            rows.append({"t": int((started - first).total_seconds() * 1000) if first else 0,
+                         "ms": round(entry["time"]), "method": request.get("method", "GET"),
+                         "path": urlparse(url).path or "/", "url": url,
+                         "status": response.get("status")})
+        return rows
+    except (OSError, ValueError, TypeError, KeyError, IndexError):
+        return []
+
+
 @router.get("/api/insights/network")
-async def network(s: AsyncSession = Depends(session)):
-    evs = (await s.scalars(select(Evidence).join(Run, Run.id == Evidence.run_id).where(Evidence.kind == "network")
-                           .order_by(Run.started_at))).all()
+async def network(run: str | None = None, case: str | None = None, s: AsyncSession = Depends(session)):
+    scoped = await _scope(s, run)
+    q = select(Evidence).join(Run, Run.id == Evidence.run_id).where(Evidence.kind.in_(["network", "har", "trace"])).order_by(Run.started_at)
+    evs = (await s.scalars(q.where(Evidence.run_id == scoped.id) if scoped else q)).all()
+    cases = sorted({e.test_case_id for e in evs})
+    artifacts = [{"case": cid, "har": next((f"/api/evidence/{e.id}" for e in evs if e.test_case_id == cid and e.kind == "har"), None),
+                  "trace": next((f"/api/evidence/{e.id}" for e in evs if e.test_case_id == cid and e.kind == "trace"), None)}
+                 for cid in cases]
+    if case:
+        evs = [e for e in evs if e.test_case_id == case]
+        artifacts = [row for row in artifacts if row["case"] == case]
+    grouped: dict[tuple[str, str], list[Evidence]] = defaultdict(list)
+    for ev in evs:
+        if ev.kind in {"har", "network"}:
+            grouped[(ev.run_id, ev.test_case_id)].append(ev)
     stats: dict[tuple[str, str], dict] = {}
     times: dict[tuple[str, str], list[int]] = defaultdict(list)
     codes: Counter = Counter()
     files, waterfall = 0, None
-    for ev in evs:
-        reqs = _read_network(ev.uri)
+    for group in grouped.values():
+        ev, reqs = None, []
+        for candidate in sorted(group, key=lambda item: item.kind != "har"):
+            parsed = await (_read_har(candidate.uri) if candidate.kind == "har" else _read_network(candidate.uri))
+            if parsed:
+                ev, reqs = candidate, parsed
+                break
         if not reqs:
             continue
         files += 1
@@ -253,7 +336,9 @@ async def network(s: AsyncSession = Depends(session)):
         ms = sorted(times.get(key, []))
         row["p50"], row["p95"] = (ms[len(ms) // 2], ms[min(len(ms) - 1, int(len(ms) * 0.95))]) if ms else (None, None)
     endpoints = sorted(stats.values(), key=lambda r: (-r["requests"], r["method"], r["path"]))
-    return {"files": files, "endpoints": endpoints, "statusCodes": dict(sorted(codes.items())), "waterfall": waterfall,
+    return {"files": files, "cases": cases, "selectedCase": case, "artifacts": artifacts,
+            "endpoints": endpoints, "statusCodes": dict(sorted(codes.items())), "waterfall": waterfall,
+            "scope": {"run": scoped.display_id, "uuid": scoped.id, "name": scoped.name} if scoped else None,
             "totals": {"requests": sum(r["requests"] for r in endpoints), "errors": sum(r["errors"] for r in endpoints),
                        "duplicatePosts": sum(r["duplicatePosts"] for r in endpoints)}}
 

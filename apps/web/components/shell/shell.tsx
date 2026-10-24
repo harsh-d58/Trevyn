@@ -11,6 +11,7 @@ import { CommandMenu } from "./command-menu"
 import { Rail } from "./rail"
 import { TopBar } from "./top-bar"
 import { Wallpaper } from "./wallpaper"
+import { useLive } from "@/lib/live"
 
 const HINT_KEY = "trevyn.hint.dismissed"
 
@@ -58,6 +59,16 @@ function Keyboard({ setSearch }: { setSearch: React.Dispatch<React.SetStateActio
   return null
 }
 
+function ScopeBanner() {
+  const source = useLive((s) => s.source)
+  const selected = useLive((s) => s.scope)
+  const run = useLive((s) => s.runs.find((r) => r.uuid === s.scope))
+  if (source !== "live") return null
+  return <div className="mx-auto mt-2 max-w-[1440px] text-[11px] text-muted-foreground" data-run-scope={selected ?? "none"}>
+    Viewing {run?.id ?? selected?.slice(0, 8) ?? "no run"}{run ? ` · ${run.name} · ${run.state ?? run.status}` : ""}
+  </div>
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const [search, setSearch] = useState(false)
   return (
@@ -66,6 +77,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <Rail />
       <div className="min-h-dvh px-3 pb-16 md:pl-[84px] lg:pr-5">
         <TopBar onSearch={() => setSearch(true)} />
+        <ScopeBanner />
         <main className="mx-auto mt-5 max-w-[1440px]">{children}</main>
       </div>
       <CommandMenu open={search} onOpenChange={setSearch} />

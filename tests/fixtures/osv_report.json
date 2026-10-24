@@ -1,0 +1,1 @@
+{"results":[{"source":{"path":"/tmp/checkout/package-lock.json","type":"lockfile"},"packages":[{"package":{"name":"old-package","version":"1.0.0","ecosystem":"npm"},"vulnerabilities":[{"id":"GHSA-aaaa-bbbb-cccc","aliases":["CVE-2025-0001"],"affected":[{"ranges":[{"events":[{"introduced":"0"},{"fixed":"1.2.0"}]}]}],"database_specific":{"severity":"HIGH"}}]}]}]}

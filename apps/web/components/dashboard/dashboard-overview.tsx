@@ -120,6 +120,7 @@ export function DashboardOverview({ summary, live }: { summary: DashboardSummary
   const runs: DashboardRun[] = useLive((s) => s.runs)
   const pending = useLive((s) => s.approvals.length)
   const findings = useLive((s) => s.findings)
+  const scoped: DashboardRun | undefined = useLive((s) => s.runs.find((r) => r.uuid === s.scope)) // the top bar's run picker
   const inApproval = findings.filter((finding) => finding.column === "approval").length
   const running = runs.filter((run) => run.status === "running")
   const focus = focusFor(projects, runs, pending, inApproval, live)
@@ -139,7 +140,7 @@ export function DashboardOverview({ summary, live }: { summary: DashboardSummary
 
       <div className="overview-context-row">
         <ProjectContext projects={projects} />
-        <div className={cn("overview-source", !live && "overview-source-demo")}><span className={cn("size-1.5 rounded-full", live ? "bg-det" : "bg-human")} />{live ? "Snapshot" : "Sample data"}<span className="overview-source-divider" />{live ? "Last 7 days" : "Demo"}</div>
+        <div className={cn("overview-source", !live && "overview-source-demo")}><span className={cn("size-1.5 rounded-full", live ? "bg-det" : "bg-human")} />{live ? "Snapshot" : "Sample data"}<span className="overview-source-divider" />{live ? (scoped ? `${scoped.id} only` : "Last 7 days") : "Demo"}</div>
       </div>
       {!live && apiEnabled && <p className="overview-notice" role="status"><TriangleAlert size={14} />Live data unavailable. Showing sample data.</p>}
 
@@ -151,12 +152,12 @@ export function DashboardOverview({ summary, live }: { summary: DashboardSummary
             <p>{focus.description}</p>
             <div className="mt-6 flex flex-wrap items-center gap-4"><Link href={focus.href} className="overview-primary">{focus.action}<ArrowRight size={15} /></Link><Link href="/plans" className="overview-text-link">Test plans<ArrowUpRight size={13} /></Link></div>
           </div>
-          <RunSnapshot run={running[0] ?? runs[0]} live={live} />
+          <RunSnapshot run={scoped ?? running[0] ?? runs[0]} live={live} />
         </section>
         <div className="overview-review"><ReviewQueue /></div>
       </div>
 
-      <div className="overview-section-heading"><h2>Metrics</h2><span>{live ? "vs. previous 7 days" : "Sample · vs. previous 30 days"}</span></div>
+      <div className="overview-section-heading"><h2>Metrics</h2><span>{live ? (scoped ? `${scoped.id} · whole run` : "vs. previous 7 days") : "Sample · vs. previous 30 days"}</span></div>
       <KpiRow kpis={summary.kpis} live={live} />
 
       <div className="overview-charts-grid">

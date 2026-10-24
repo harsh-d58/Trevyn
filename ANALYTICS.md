@@ -228,6 +228,31 @@ Order inside P1 (start here): **M1 store live fields → top bar → analytics �
   - The runner records `ms` per request.
   - `/api/insights/network` gained p50/p95, `statusCodes` and a `waterfall`.
 - **Shared kit:** `components/kit/page-loading.tsx` (`PageLoading`, `Empty`). With the API on, pages show a loading or error state, never demo numbers.
+- **Run scope (every page follows one run):**
+  - The top-bar run picker writes the `trevyn_run` cookie and calls `store.setScope`.
+  - Overview, analytics, network, findings and approvals take `?run=` (uuid or display id).
+  - The store reloads its findings, approvals and loop for that run, so Board, Findings, Approvals, the review queue and the overview follow it.
+  - Server pages read the cookie (`lib/scope-server.ts`). The live run page and the pipeline map default to the picked run.
+  - Verified in a browser: All runs shows 10 findings; RUN-2482 shows its own 5 on Analytics and Board; switching back to All runs shows 10 again.
+- **Human-in-the-loop fix:**
+  - The cause was the demo script running against a real run: a refresh that fell back to demo data switched it on.
+  - The store mode is now fixed when the store is created. Demo actions refuse to run in live mode. With the API on there is no demo fallback; reads that fail show empty.
+  - Approvals carry `run` and `runUuid`. `store.decideGate` approves the real gate.
+  - Verified: a high-risk gate was approved by clicking Approve on /approvals (POST to AP-1, 200), and the run resumed and completed.
+- **AI on (FastRouter):**
+  - `MODEL_PROVIDER=fastrouter`, `LLM_BASE_URL=https://go.fastrouter.ai/api/v1`.
+  - Planner, diagnostician and fix use `anthropic/claude-haiku-5.5`; the assistant uses `google/gemini-2.5-flash`. Sonnet returned 402 on the current balance.
+  - Output is capped per node (`LLM_MAX_TOKENS_*`).
+  - A plan costs about $0.005. Both e2e scripts pass with AI planning.
+- **Planner reliability:**
+  - `sitemap_plan`: the no-AI fallback builds page, link and form cases from the scan, never fewer than the 2 smoke cases.
+  - Invalid AI cases are dropped instead of discarding the plan, and assertions whose subject isn't a locator are rejected.
+  - Demo-shop prompts include its known working journeys.
+- **Runner:**
+  - `label=` also matches a field's placeholder.
+  - Quoted names (`name='Active'`) are unquoted.
+  - Clicking a disabled control counts as an ignored click.
+- **Scan:** records hidden buttons separately and marks each field visible or not.
 - **Merge note:** the incoming dashboard redesign shows `LoopRings`, `PlatformPipeline` and `LoopStrip` only in its demo-mode "Demo tools" panel. Their live versions exist now; whether they return to the live overview is a design call.
 
 ---
@@ -248,3 +273,7 @@ Order inside P1 (start here): **M1 store live fields → top bar → analytics �
 - **Seeded demo project:** the API seeds "ShopFlow Commerce" for the demo shop; it is real data for the local
   shop, not mock — label it "Demo shop" in the switcher.
 - **Engines not built:** performance/API/compat pages stay mostly empty until P4; that is intended.
+
+## 7. Quality-lane update (24 Oct 2026)
+
+The run-scoped quality build has five new rule-based lanes. ZAP baseline has a parser and LangGraph lane with a warning path when Docker is unavailable; P1-P9 remain independent. The UI runner captures sanitized HAR files alongside Playwright traces. `/api/insights/network` reads HAR timings where present and falls back to the existing network log; Network & traces exposes per-case HAR and trace links. The security projection exposes passive rule outcomes and parsed ZAP alerts with CWE IDs. A compatibility lane records safe-case outcomes for Firefox, WebKit, and an iPhone 13 preset. Chromium injects vendored axe-core and web-vitals after/before navigation respectively, storing WCAG 2.1 A/AA violations and real browser metrics as evidence. A Lighthouse lane measures up to four pages and stores its JSON report and parsed score/metric/opportunity evidence. A gray-box repository lane verifies a pinned checkout and runs installed OSV-Scanner/Gitleaks CLIs, persisting only redacted Gitleaks fields. Security, Performance, Compatibility, UI, Planner, and Network read their selected run's stored results. Missing tools or measurements remain “not run” or lane warnings; a new run with the tools installed is needed to populate the pages.

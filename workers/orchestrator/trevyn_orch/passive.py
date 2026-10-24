@@ -31,6 +31,7 @@ class Issue:
     message: str
     path: str
     evidence: dict
+    evidence_ids: list[str] = field(default_factory=list)
 
 
 def _h(r: Response, name: str) -> str | None:

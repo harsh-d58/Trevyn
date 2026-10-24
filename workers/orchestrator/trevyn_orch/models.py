@@ -198,18 +198,25 @@ class GeminiAdapter:
         return out, usage[0] if usage else Usage(node=kw["node"], provider="google", model=self._model(kw["node"]))
 
 
+GATEWAYS = {"openrouter": "https://openrouter.ai/api/v1", "fastrouter": "https://go.fastrouter.ai/api/v1"}
+
+
 class OpenAICompatAdapter:
     """Any OpenAI-compatible gateway (OpenRouter, Together, Groq, a local server…): one key, many models.
-    MODEL_PROVIDER=openrouter|openai_compat, LLM_API_KEY, LLM_BASE_URL, and one model per node (LLM_MODEL_PLANNER, …).
+    MODEL_PROVIDER=openrouter|fastrouter|openai_compat, LLM_API_KEY, LLM_BASE_URL, and one model per node (LLM_MODEL_PLANNER, …).
     Plain httpx, no SDK. Model output is validated against the Pydantic schema; a bad reply falls back to rules."""
 
     NODES = ("planner", "diagnostician", "fix", "assistant")
 
     def __init__(self) -> None:
         self.key = os.getenv("LLM_API_KEY", "")
-        self.base = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+        default_base = GATEWAYS.get(os.getenv("MODEL_PROVIDER", "").lower(), GATEWAYS["openrouter"])
+        self.base = (os.getenv("LLM_BASE_URL") or default_base).rstrip("/")
         default = os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
         self.models = {n: os.getenv(f"LLM_MODEL_{n.upper()}", default) for n in self.NODES}
+        # Gateways reserve credit for the longest possible reply; without a cap a low balance refuses big models (402)
+        self.max_tokens = {n: int(os.getenv(f"LLM_MAX_TOKENS_{n.upper()}", d)) for n, d in
+                           (("planner", 6000), ("diagnostician", 2500), ("fix", 2000), ("assistant", 2000))}
 
     @property
     def available(self) -> bool:
@@ -236,7 +243,8 @@ class OpenAICompatAdapter:
         js = schema.model_json_schema()
         messages = [{"role": "system", "content": "\n\n".join([system, *stable, "Reply with JSON only, matching this JSON Schema:\n" + json.dumps(js)])},
                     {"role": "user", "content": prompt}]
-        body = {"model": model, "messages": messages, "response_format": {"type": "json_schema", "json_schema": {"name": schema.__name__, "schema": js}}}
+        body = {"model": model, "messages": messages, "max_tokens": self.max_tokens[node],
+                "response_format": {"type": "json_schema", "json_schema": {"name": schema.__name__, "schema": js}}}
         try:
             async with httpx.AsyncClient(timeout=180) as c:
                 r = await c.post(f"{self.base}/chat/completions", json=body, headers=self._headers())
@@ -260,7 +268,7 @@ class OpenAICompatAdapter:
 
         import httpx
         model, t0, last = self.models[node], time.monotonic(), {}
-        body = {"model": model, "stream": True, "stream_options": {"include_usage": True},
+        body = {"model": model, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": self.max_tokens[node],
                 "messages": [{"role": "system", "content": "\n\n".join([system, *stable])}] + [m for m in messages if isinstance(m.get("content"), str)]}
         try:
             async with httpx.AsyncClient(timeout=180) as c, c.stream("POST", f"{self.base}/chat/completions", json=body, headers=self._headers()) as r:
@@ -286,7 +294,7 @@ class OpenAICompatAdapter:
 
 def _pick():
     provider = os.getenv("MODEL_PROVIDER", "").lower()
-    if provider in ("openrouter", "openai_compat") or (not provider and os.getenv("LLM_API_KEY")):
+    if provider in ("openrouter", "fastrouter", "openai_compat") or (not provider and os.getenv("LLM_API_KEY")):
         return OpenAICompatAdapter()
     if provider == "gemini" or (not provider and (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))):
         return GeminiAdapter()

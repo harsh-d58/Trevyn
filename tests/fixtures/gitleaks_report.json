@@ -1,0 +1,1 @@
+[{"RuleID":"generic-api-key","File":"src/config.ts","StartLine":12,"Secret":"super-sensitive-value","Match":"key=super-sensitive-value","Line":"key=super-sensitive-value","Fingerprint":"super-sensitive-value"}]

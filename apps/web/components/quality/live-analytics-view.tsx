@@ -49,11 +49,13 @@ function evidenceGraph(e: LiveAnalytics["evidence"]) {
   return { nodes, edges, h: 48 + Math.max(e.findings.length, kinds.length, 1) * 72 }
 }
 
-export function LiveAnalyticsView({ data }: { data: LiveAnalytics }) {
+type EvidenceDiagram = { nodes: FlowNodeData[]; edges: FlowEdgeData[]; w: number; h: number }
+
+export function LiveAnalyticsView({ data, diagram }: { data: LiveAnalytics; diagram?: EvidenceDiagram | null }) {
   const { flow, evidence } = data
   const sankey = flowChart(flow)
-  const graph = evidenceGraph(evidence)
-  const [sel, setSel] = useState(evidence.findings[0]?.id ?? "")
+  const graph = diagram ?? evidenceGraph(evidence)
+  const [sel, setSel] = useState(graph.nodes[0]?.id ?? "")
   const linked = graph.edges.filter((e) => e.from === sel || e.to === sel).map((e) => (e.from === sel ? e.to : e.from))
   const name = (id: string) => graph.nodes.find((n) => n.id === id)?.label ?? id
   const pass = data.passRate30.filter((d): d is { date: string; rate: number } => d.rate !== null)
@@ -62,7 +64,7 @@ export function LiveAnalyticsView({ data }: { data: LiveAnalytics }) {
   const peak = data.heatmap.reduce<LiveAnalytics["heatmap"][number] | null>((m, c) => (!m || c.count > m.count ? c : m), null)
   return (
     <div className="grid gap-3.5">
-      <PageHeader eyebrow="Intelligence" title="Analytics" sub="Quality trends across all projects, measured from runs, findings and repairs." />
+      <PageHeader eyebrow="Intelligence" title="Analytics" sub="Quality trends measured from the selected run, findings and repairs." />
       <StatStrip items={[
         ["Mean time to resolve", lastMttr ? `${lastMttr.mttrHours} h` : "—", lastMttr ? `${lastMttr.count} verified this week` : "No verified repairs yet", "ok"],
         ["Flaky tests", data.flaky.length, "Mixed outcomes in their last 10 runs", data.flaky.length ? "warn" : "ok"],
@@ -111,7 +113,7 @@ export function LiveAnalyticsView({ data }: { data: LiveAnalytics }) {
             <span className="ml-auto text-[11px] text-muted-foreground">Click a node · newest {evidence.findings.length} confirmed or uncertain findings</span>
           </div>
         ) : undefined}>
-        {evidence.findings.length ? <FlowMap pastel nodes={graph.nodes} edges={graph.edges} w={900} h={graph.h} nw={178} sel={sel} onSelect={setSel} label="Finding to evidence network" />
+        {graph.nodes.length ? <FlowMap pastel nodes={graph.nodes} edges={graph.edges} w={diagram?.w ?? 900} h={graph.h} nw={178} sel={sel} onSelect={setSel} label="Finding to evidence network" />
           : <Empty what="No evidence-backed findings yet" why="Each confirmed finding links to the screenshots, traces and logs that prove it." />}
       </StagePanel>
       <div className="grid gap-3.5 xl:grid-cols-[2fr_1fr]">

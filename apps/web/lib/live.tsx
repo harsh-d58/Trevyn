@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react"
 import { toast } from "sonner"
 import { api, API_URL, type Items } from "./api"
+import { runParam, withRun, writeProjectCookie, writeScopeCookie } from "./scope"
 import { RELEASE_APPROVAL, gateApproval } from "./demo/core"
 import { LIVE_SCRIPT } from "./demo/runs"
 import type { Approval, BoardColumn, Finding, Provenance, RunSummary, ScriptEntry, Workspace } from "./types"
@@ -27,6 +28,9 @@ type Pair = [number, number]
 
 export type LiveState = {
   source: "live" | "demo"
+  /** selected run uuid: findings, approvals and the loop are that run's; null = all runs */
+  scope: string | null
+  project: string | null
   run: LiveRun | null
   flash: Flash | null
   queue: Flash[]
@@ -78,6 +82,8 @@ function createLiveStore(initial: Workspace) {
   const seed = initial.runs.find((r) => r.status === "running")
   let state: LiveState = {
     source: live ? "live" : "demo",
+    scope: initial.scope ?? null,
+    project: initial.project ?? null,
     run: live ? apiRun(initial.runs, null)
       : seed ? { id: seed.id, name: seed.name, total: seed.total, done: seed.passed, startedAt: 0, state: "running", gateApproved: true, ...replay(seed.passed) } : null,
     flash: null,
@@ -123,6 +129,39 @@ function createLiveStore(initial: Workspace) {
     sync(p: Partial<Pick<LiveState, "findings" | "runs" | "approvals" | "loop">>) {
       set((s) => ({ ...p, ...(p.runs && { run: apiRun(p.runs, s.run), runsToday: p.runs.filter((r) => sameDay(r.started)).length }) }))
     },
+    /** refetches every list for the current scope (live mode) */
+    async reload() {
+      if (state.source !== "live") return
+      const run = state.scope
+      if (!run) {
+        const runs = await api<Items<RunSummary>>(`/api/runs${state.project ? `?project=${encodeURIComponent(state.project)}` : ""}`).catch(() => null)
+        if (runs && !state.scope) store.sync({ runs: runs.items, findings: [], approvals: [], loop: { plan: [0, 0], prove: [0, 0], decide: [0, 0] } })
+        return
+      }
+      const [findings, runs, approvals, overview] = await Promise.all([
+        api<Items<Finding>>(`/api/findings${runParam(run)}`), api<Items<RunSummary>>(`/api/runs${state.project ? `?project=${encodeURIComponent(state.project)}` : ""}`),
+        api<Items<Approval>>(`/api/approvals?status=pending${runParam(run, "&")}`), api<{ loop: LiveState["loop"] }>(`/api/dashboard/overview${runParam(run)}`),
+      ]).catch(() => [null, null, null, null] as const)
+      if (findings && runs && approvals && overview && run === state.scope) {
+        store.sync({ findings: findings.items, runs: runs.items, approvals: approvals.items, loop: overview.loop })
+      }
+    },
+    /** selects the run every page follows (null = all runs); server pages pick it up from the cookie on refresh */
+    async setScope(run: string | null) {
+      writeScopeCookie(run)
+      const project = state.runs.find((r) => r.uuid === run)?.project_id ?? state.project
+      writeProjectCookie(project ?? null)
+      set(() => ({ scope: run, project: project ?? null }))
+      await store.reload()
+    },
+    async setProject(project: string | null) {
+      writeProjectCookie(project)
+      const result = await api<Items<RunSummary>>(`/api/runs?limit=1${project ? `&project=${encodeURIComponent(project)}` : ""}`)
+      const run = result.items[0]?.uuid ?? null
+      writeScopeCookie(run)
+      set(() => ({ project, scope: run }))
+      await store.reload()
+    },
     /** UI-lane progress of a real run (workspace event run_progress) */
     progress(uuid: string, done: number, total: number) {
       if (state.run?.uuid === uuid) patchRun({ done, total: Math.max(total, state.run.total) })
@@ -157,10 +196,11 @@ function createLiveStore(initial: Workspace) {
     },
 
     /* ---------- approvals ---------- */
-    /** returns whether the decision can be undone (gate and patch approvals start work, so they can't) */
+    /** demo store only: returns whether the decision can be undone (gate and patch approvals start work, so they can't).
+     * Live approvals are decided through the API and then dropped with settleApproval. */
     approve(id: string): { undoable: boolean } {
       const a = state.approvals.find((x) => x.id === id)
-      if (!a) return { undoable: false }
+      if (!a || state.source === "live") return { undoable: false }
       set((s) => ({
         approvals: s.approvals.filter((x) => x.id !== id),
         approved: [a, ...s.approved],
@@ -173,7 +213,7 @@ function createLiveStore(initial: Workspace) {
     },
     reject(id: string) {
       const a = state.approvals.find((x) => x.id === id)
-      if (!a) return
+      if (!a || state.source === "live") return
       set((s) => ({ approvals: s.approvals.filter((x) => x.id !== id), loop: { ...s.loop, decide: [s.loop.decide[0] + 1, s.loop.decide[1]] } }))
       log("human", `${a.id} rejected by Alex Chen`)
       if (id.startsWith("GATE-")) store.stopRun("High-impact tests rejected")
@@ -199,6 +239,7 @@ function createLiveStore(initial: Workspace) {
       }))
     },
     request(a: Approval) {
+      if (state.source === "live") return // live approvals only come from the API
       if (state.approvals.some((x) => x.id === a.id)) return
       set((s) => ({ approvals: [a, ...s.approvals], loop: { ...s.loop, decide: [s.loop.decide[0], s.loop.decide[1] + 1] } }))
       log("human", `${a.id} · approval requested`)
@@ -244,20 +285,33 @@ function createLiveStore(initial: Workspace) {
     },
     resumeGate() {
       const r = state.run
-      if (!r || r.state !== "gate") return
+      if (!r || r.state !== "gate" || state.source === "live") return
       patchRun({ state: "running", gateApproved: true })
       log("human", `${r.id} · high-impact tests approved, run continues`)
     },
     approveGate() {
       const r = state.run
       if (!r || r.state !== "gate") return
+      if (state.source === "live") return void store.decideGate(true)
       const g = gateApproval(r.id).id
       if (state.approvals.some((a) => a.id === g)) store.approve(g)
       else store.resumeGate()
     },
+    /** live: decides the real gate approval of the island's run through the API; the run resumes server-side */
+    async decideGate(approve: boolean): Promise<boolean> {
+      const r = state.run
+      const a = r?.uuid ? state.approvals.find((x) => x.runUuid === r.uuid) : undefined
+      if (!r || !a) { flash("info", `${r?.id ?? "Run"}: open the run to decide its gate`, r?.uuid ? `/runs/live?run=${r.uuid}` : "/approvals"); return false }
+      try {
+        await api(`/api/approvals/${encodeURIComponent(a.id)}/decision`, { json: { approve, reason: approve ? "approved from the island" : "rejected from the island" } })
+        store.settleApproval(a.id, approve)
+        patchRun({ state: approve ? "running" : r.state, gateApproved: approve })
+        return true
+      } catch (e) { flash("info", (e as Error).message); return false }
+    },
     stopRun(why = "Run stopped") {
       const r = state.run
-      if (!r || !isLive(r)) return
+      if (!r || !isLive(r) || state.source === "live") return
       patchRun({ state: "stopped" })
       set((s) => ({ approvals: s.approvals.filter((a) => a.id !== gateApproval(r.id).id) }))
       patchSummary(r.id, { status: "stopped", passed: r.done - r.failed - r.inconclusive, duration: r.startedAt ? clock(Date.now() - r.startedAt) : "—" })
@@ -280,7 +334,7 @@ function createLiveStore(initial: Workspace) {
     /** one tick of the scripted run: emit the next due log line, else execute one more test */
     step() {
       const r = state.run
-      if (!r || r.state !== "running") return
+      if (!r || r.state !== "running" || state.source === "live") return // the script never drives a real run
       const next = LIVE_SCRIPT[r.cursor]
       if (next && next.at <= r.done) return store.emit(r, next)
       if (r.done < r.total) patchRun({ done: r.done + 1 })
@@ -328,8 +382,10 @@ const LiveContext = createContext<LiveStore | null>(null)
 
 export function LiveProvider({ initial, children }: { initial: Workspace; children: React.ReactNode }) {
   const [store] = useState(() => createLiveStore(initial))
-  useDemoStream(store, initial.source !== "live")
-  useWorkspaceEvents(store, initial.source === "live") // live API: one workspace feed per tab; each run also has its own SSE
+  // Decided once, when the store is made: a later refresh can never turn the demo script on against real runs
+  const mode = store.get().source
+  useDemoStream(store, mode === "demo")
+  useWorkspaceEvents(store, mode === "live") // live API: one workspace feed per tab; each run also has its own SSE
   return <LiveContext.Provider value={store}>{children}</LiveContext.Provider>
 }
 
@@ -343,6 +399,13 @@ export function useLiveStore() {
 export function useLive<T>(select: (s: LiveState) => T): T {
   const store = useLiveStore()
   return useSyncExternalStore(store.subscribe, () => select(store.get()), () => select(store.get()))
+}
+
+/** Current project/run selection for client views and run-scoped links. */
+export function useScope() {
+  const project = useLive((s) => s.project)
+  const run = useLive((s) => s.scope)
+  return { project, run, withRun: (path: string) => withRun(path, run) }
 }
 
 function useDemoStream(store: LiveStore, enabled: boolean) {
@@ -391,14 +454,8 @@ function useWorkspaceEvents(store: LiveStore, enabled: boolean) {
     const resync = () => {
       if (debounce) clearTimeout(debounce)
       debounce = setTimeout(async () => {
-        const [findings, runs, approvals, overview] = await Promise.all([
-          api<Items<Finding>>("/api/findings"), api<Items<RunSummary>>("/api/runs"), api<Items<Approval>>("/api/approvals?status=pending"),
-          api<{ loop: LiveState["loop"] }>("/api/dashboard/overview"),
-        ]).catch(() => [null, null, null, null] as const)
+        await store.reload()
         if (!mounted) return
-        if (findings && runs && approvals && overview) {
-          store.sync({ findings: findings.items, runs: runs.items, approvals: approvals.items, loop: overview.loop })
-        }
         router.refresh()
       }, 700)
     }
@@ -408,7 +465,7 @@ function useWorkspaceEvents(store: LiveStore, enabled: boolean) {
         const { ticket } = await api<{ ticket: string }>("/api/sse-ticket", { method: "POST" })
         if (!mounted) return
         source = new EventSource(`${API_URL}/api/events/stream?after_id=${last}&ticket=${encodeURIComponent(ticket)}`)
-        source.onopen = () => { failures = 0 }
+        source.onopen = () => { failures = 0; resync() } // catch up on anything missed while disconnected
         source.addEventListener("workspace", (m) => {
           try {
             const e = JSON.parse((m as MessageEvent).data) as WorkspaceEvent

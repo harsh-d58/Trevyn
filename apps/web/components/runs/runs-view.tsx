@@ -22,30 +22,35 @@ import { cn } from "@/lib/utils"
 type Ledger = Awaited<ReturnType<typeof getRunLedger>>
 type Filters = { run?: string | null; suite?: string | null; date?: string | null }
 
-export function RunsWithParams({ ledger }: { ledger: Ledger }) {
+export function RunsWithParams({ ledger }: { ledger?: Ledger }) {
   const q = useSearchParams()
   return <RunsView ledger={ledger} filters={{ run: q.get("run"), suite: q.get("suite"), date: q.get("date") }} />
 }
 
-export function RunsView({ ledger, filters = {} }: { ledger: Ledger; filters?: Filters }) {
+export function RunsView({ ledger, filters = {} }: { ledger?: Ledger; filters?: Filters }) {
   const router = useRouter()
   const runs = useLive((s) => s.runs)
   const live = useLive((s) => s.run)
+  const selected = useLive((s) => s.scope)
+  const project = useLive((s) => s.project)
   const [apiRuns, setApiRuns] = useState<ApiRun[] | null>(null)
   const [refreshError, setRefreshError] = useState("")
   useEffect(() => {
     if (!apiEnabled) return
     let mounted = true
-    const refresh = () => api<Items<ApiRun>>("/api/runs?limit=100")
+    const refresh = () => api<Items<ApiRun>>(`/api/runs?limit=100${project ? `&project=${encodeURIComponent(project)}` : ""}`)
       .then(({ items }) => { if (mounted) { setApiRuns(items); setRefreshError("") } })
       .catch((e: Error) => { if (mounted) setRefreshError(e.message) })
     void refresh()
     const timer = setInterval(() => { if (!document.hidden) void refresh() }, 3000)
     return () => { mounted = false; clearInterval(timer) }
-  }, [])
+  }, [project])
   const rows = (apiEnabled ? apiRuns ?? [] : runs.map((r) => (live?.id === r.id && r.status === "running" ? { ...r, passed: live.done } : r)))
     .filter((r) => !filters.suite || r.name.toLowerCase().includes(filters.suite.toLowerCase()))
   const maxD = Math.max(...rows.map((r) => secs(r.duration)), 1)
+  const chosenIndex = apiEnabled ? rows.findIndex((r) => r.uuid === selected) : -1
+  const chosen = chosenIndex >= 0 ? rows[chosenIndex] : null
+  const previous = chosenIndex >= 0 ? rows[chosenIndex + 1] : null
   const chips = [filters.suite && `Suite: ${filters.suite}`, filters.date && `Day: ${shortDate(filters.date)} (demo shows today's ledger)`].filter(Boolean)
 
   return (
@@ -55,8 +60,13 @@ export function RunsView({ ledger, filters = {} }: { ledger: Ledger; filters?: F
         <Button variant="glass" size="pill" render={<Link href="/runs/live" />}><CirclePlay />Watch live run</Button>
         <Button variant="brand" size="pill" render={<Link href="/runs/new" />}><Plus />New test run</Button>
       </PageHeader>
-      {!apiEnabled && <StatStrip items={ledger.kpis} />}
+      {!apiEnabled && ledger && <StatStrip items={ledger.kpis} />}
       {refreshError && <p role="alert" className="text-sm text-bad">Could not refresh runs: {refreshError}</p>}
+      {chosen && <Card title={`Selected run · ${chosen.id}`}>
+        <p className="text-[13px]">{chosen.passed}/{chosen.total} passed · {chosen.state ?? chosen.status}</p>
+        {previous ? <p className="mt-1 text-[12px] text-muted-foreground">Previous {previous.id}: {previous.passed}/{previous.total} passed · change {chosen.total && previous.total ? `${((100 * chosen.passed / chosen.total) - (100 * previous.passed / previous.total)).toFixed(1)} points` : "not comparable"}</p>
+          : <p className="mt-1 text-[12px] text-muted-foreground">No earlier run in this project.</p>}
+      </Card>}
 
       <Card flush title="Run ledger" caption={apiEnabled ? `${rows.length} runs · refreshes every 3 seconds` : "Duration bars share one scale"}
         extra={chips.length > 0 && (
@@ -69,7 +79,7 @@ export function RunsView({ ledger, filters = {} }: { ledger: Ledger; filters?: F
           {rows.map((r) => {
             const href = apiEnabled ? `/runs/live?run=${encodeURIComponent(r.uuid ?? r.id)}` : r.status === "running" ? "/runs/live" : "/findings/DEF-142"
             return (
-              <Row key={r.uuid ?? r.id} onClick={() => router.push(href)} highlight={filters.run === r.id}>
+              <Row key={r.uuid ?? r.id} onClick={() => router.push(href)} highlight={filters.run === r.id || (apiEnabled && selected === r.uuid)}>
                 <Cell>
                   <Link href={href} onClick={(e) => e.stopPropagation()} className="block">
                     <span className="block font-mono text-[11px] text-muted-foreground">{r.id}</span>
@@ -88,7 +98,7 @@ export function RunsView({ ledger, filters = {} }: { ledger: Ledger; filters?: F
         </DataTable>
       </Card>
 
-      {!apiEnabled && <Card title="Run timeline · last 6 completed runs" extra={<span className="font-mono text-[11px] text-muted-foreground">phases on a 0–13 min axis</span>}>
+      {!apiEnabled && ledger && <Card title="Run timeline · last 6 completed runs" extra={<span className="font-mono text-[11px] text-muted-foreground">phases on a 0–13 min axis</span>}>
         <Gantt rows={ledger.timeline} phases={PHASES} max={780} ticks={[0, 120, 240, 360, 480, 600, 720]} />
       </Card>}
     </div>

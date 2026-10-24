@@ -2,16 +2,23 @@
 (PLAN_MODES §3-4). The orchestrator owns no storage: it talks to the control plane through the RunCtx protocol."""
 from __future__ import annotations
 
+import asyncio
 import json
+import re
+import time
 import uuid
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 
 from trevyn_contracts import CaseResult, Diagnosis, RunnerJob, Target, TestCase, Verdict
 from trevyn_runner.runner import run_job
 
 from . import diagnose as dx
 from . import passive
+from . import zap
+from . import repo_scan
+from . import lighthouse
 from .models import Usage
 from .verifier import explain, verify
 
@@ -108,9 +115,12 @@ async def run_cases(ctx: RunCtx, approved: list[TestCase], target: Target,
             await ctx.state("FAILED", res.error or "runner infra error")
             return None
         case = res.cases[0]
+        if n == 1 and res.environment:
+            await ctx.log("det", "environment", "Browser environment recorded", "ok", {"environment": res.environment})
         for s in case.steps:
             await ctx.log("det", "step", f"{tc.test_case_id} · {s.action} {(tc.steps[s.i].target or '')}"[:160],
-                          "ok" if s.ok else "failed", {"t_ms": s.t_ms, "error": s.error, "healed": getattr(s, "healed", None)})
+                          "ok" if s.ok else "failed", {"t_ms": s.t_ms, "error": s.error, "healed": getattr(s, "healed", None),
+                                                        "navigation": s.navigation, "test_case_id": tc.test_case_id})
         for a in case.assertions:
             await ctx.log("det", "assertion", f"{tc.test_case_id} · {a.message}", "ok" if a.ok else ("failed" if a.evaluated else "inconclusive"))
         if case.dup_posts:
@@ -137,8 +147,129 @@ async def passive_lane(ctx: RunCtx, target: Target, paths: list[str]) -> list[pa
         await lane(ctx, "security_passive", 1, 1, "warn", f"could not fetch pages: {type(e).__name__}")
         return []
     issues = passive.header_rules(responses)
+    failed = {i.rule for i in issues}
+    https = any(urlparse(r.url).scheme == "https" and r.status < 400 for r in responses)
+    cookies = sorted({c.split("=", 1)[0].strip() for r in responses for c in r.cookies})
+    rules = {f"P{i}": ("not run" if not responses else
+                         "not applicable" if (i == 3 and not https) or (i == 5 and not any(passive.SESSION_COOKIE.search(c) for c in cookies)) else
+                         "failed" if f"P{i}" in failed else "passed") for i in range(1, 7)}
+    summary_dir = Path(ctx.evidence_dir) / ctx.run_id / "passive"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = summary_dir / "summary.json"
+    summary_path.write_text(json.dumps({"rules": rules, "pages": [r.url for r in responses], "cookies": cookies}, indent=1))
+    await ctx.add_evidence("passive_summary", str(summary_path), "PASSIVE-SUMMARY")
     await lane(ctx, "security_passive", 1, 1, "ok", f"{len(responses)} pages checked, {len(issues)} issues")
     return issues
+
+
+async def zap_lane(ctx: RunCtx, target: Target) -> list[passive.Issue]:
+    """Optional passive ZAP baseline; a tool failure is a lane warning, never a run failure."""
+    await lane(ctx, "security_zap", 0, 1)
+    try:
+        report, issues, note = await zap.run_baseline(target.base_url, Path(ctx.evidence_dir) / ctx.run_id / "zap",
+                                                     set(target.allowed_hosts))
+        if report:
+            evidence_id = await ctx.add_evidence("zap_report", str(report), "ZAP-BASELINE")
+            for issue in issues:
+                issue.evidence_ids.append(evidence_id)
+        await lane(ctx, "security_zap", 1, 1, "ok" if report else "warn", note)
+        return issues
+    except Exception as exc:
+        await lane(ctx, "security_zap", 1, 1, "warn", f"ZAP unavailable: {type(exc).__name__}")
+        return []
+
+
+async def compat_lane(ctx: RunCtx, cases: list[TestCase], target: Target) -> None:
+    """Replay only cases without side effects in Firefox, WebKit and a mobile WebKit context."""
+    from .compat import parse_matrix
+
+    variants = [("firefox", "firefox", None, False),
+                ("webkit", "webkit", None, False),
+                ("iPhone 13", "webkit", {"width": 390, "height": 844}, True)]
+    safe = [tc for tc in cases if tc.risk != "high" and not tc.side_effects
+            and all(step.action not in {"reset", "fill", "select", "press"} for step in tc.steps)]
+    total = len(safe) * len(variants)
+    await lane(ctx, "compat", 0, total)
+    rows = []
+    deadline = time.monotonic() + 120
+    for tc in cases:
+        for label, browser, viewport, mobile in variants:
+            if tc not in safe:
+                rows.append({"case": tc.test_case_id, "browser": label, "status": "not run", "note": "side effects or risk"})
+    completed = 0
+    for tc in safe:
+        for label, browser, viewport, mobile in variants:
+            if ctx.cancelled() or deadline - time.monotonic() < 2:
+                rows.append({"case": tc.test_case_id, "browser": label, "status": "not run", "note": "lane time limit"})
+                continue
+            job = RunnerJob(job_id=str(uuid.uuid4()), run_id=ctx.run_id, target=target, test_cases=[tc],
+                            browser=browser, viewport=viewport, mobile=mobile,
+                            out_dir=f"{ctx.evidence_dir}/{ctx.run_id}/compat/{label.replace(' ', '-')}/{tc.test_case_id}")
+            try:
+                result = await asyncio.wait_for(run_job(job), timeout=min(40, max(2, deadline - time.monotonic())))
+                case = result.cases[0] if result.status == "completed" and result.cases else None
+                status = ("not run" if case is None else case.outcome if case.outcome in ("passed", "failed", "errored")
+                          else "not run")
+                step_error = next((s.error for s in case.steps if s.error), "") if case else ""
+                note = ("browser unavailable" if case is None else
+                        f"step error: {step_error}"[:160] if status == "errored" else "")
+            except Exception as exc:
+                status, note = "not run", type(exc).__name__
+            rows.append({"case": tc.test_case_id, "browser": label, "status": status, "note": note})
+            completed += 1
+            await lane(ctx, "compat", completed, total, "running")
+    report = Path(ctx.evidence_dir) / ctx.run_id / "compat" / "matrix.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"rows": parse_matrix({"rows": rows})}, indent=1), encoding="utf-8")
+    await ctx.add_evidence("compat_matrix", str(report), "COMPAT-MATRIX")
+    # skipping unsafe cases is by design; warn only when a browser could not run or the time budget ran out
+    trouble = [r for r in rows if r["status"] == "not run" and r["note"] != "side effects or risk"]
+    await lane(ctx, "compat", completed, total, "warn" if trouble else "ok",
+               f"{len(trouble)} not run (browser or time limit)" if trouble else "")
+
+
+async def repo_lane(ctx: RunCtx, url: str | None, sha: str | None) -> list[passive.Issue]:
+    await lane(ctx, "repo", 0, 1)
+    if not url or not sha:
+        await lane(ctx, "repo", 1, 1, "ok", "not applicable: no connected pinned repository")
+        return []
+    try:
+        reports, note = await repo_scan.scan(url, sha, Path(ctx.evidence_dir) / ctx.run_id / "repo")
+        issues = []
+        for report, parsed in reports:
+            kind = "osv_report" if report.name.startswith("osv") else "gitleaks_report"
+            eid = await ctx.add_evidence(kind, str(report), "REPO-SCAN")
+            for issue in parsed:
+                issue.evidence_ids.append(eid)
+            issues.extend(parsed)
+        partial = any(word in note.lower() for word in ("unavailable", "failed", "not installed", "time limit"))
+        await lane(ctx, "repo", 1, 1, "ok" if reports and not partial else "warn", note)
+        return issues
+    except Exception as exc:
+        await lane(ctx, "repo", 1, 1, "warn", f"Repository scanners unavailable: {type(exc).__name__}")
+        return []
+
+
+async def performance_lane(ctx: RunCtx, target: Target, paths: list[str]) -> list[passive.Issue]:
+    await lane(ctx, "performance", 0, 1)
+    try:
+        reports, note = await lighthouse.scan(target.base_url, paths, set(target.allowed_hosts),
+                                              Path(ctx.evidence_dir) / ctx.run_id / "lighthouse")
+        issues = []
+        for index, (report, summary, parsed) in enumerate(reports):
+            eid = await ctx.add_evidence("lighthouse", str(report), f"LIGHTHOUSE-{len(issues)}")
+            summary_path = report.with_name(f"lighthouse-{index}-summary.json")
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            await ctx.add_evidence("lighthouse_summary", str(summary_path), f"LIGHTHOUSE-{index}")
+            for issue in parsed:
+                issue.evidence_ids.append(eid)
+            issues.extend(parsed)
+        await lane(ctx, "performance", 1, 1,
+                   "ok" if reports and note.startswith(f"{len(reports)}/{len(reports)} ") else "warn", note)
+        return issues
+    except Exception as exc:
+        await lane(ctx, "performance", 1, 1, "warn", f"Lighthouse unavailable: {type(exc).__name__}")
+        return []
 
 
 # ---------- verify subgraph pieces ----------
@@ -223,25 +354,49 @@ def traffic_issues(results: list[tuple[TestCase, CaseResult]], target: Target) -
     return passive.network_rules(rows, urlparse(target.base_url).hostname or "")
 
 
+async def record_traffic_summary(ctx: RunCtx, results: list[tuple[TestCase, CaseResult]], issues: list[passive.Issue]) -> None:
+    """Persist pass/fail outcomes for traffic rules, including rules that created no finding."""
+    networks = [Path(case.artefacts["network"]) for _, case in results if case.artefacts.get("network")]
+    consoles = [Path(case.artefacts["console"]) for _, case in results if case.artefacts.get("console")]
+    https_seen = False
+    for path in networks:
+        try:
+            https_seen |= any(urlparse(r.get("url", "")).scheme == "https" for r in json.loads(path.read_text()))
+        except (OSError, ValueError, TypeError):
+            pass
+    failed = {i.rule for i in issues}
+    rules = {"P7": "not run" if not networks else "not applicable" if not https_seen else "failed" if "P7" in failed else "passed",
+             "P8": "not run" if not consoles else "failed" if "P8" in failed else "passed",
+             "P9": "not run" if not networks else "failed" if "P9" in failed else "passed"}
+    out = Path(ctx.evidence_dir) / ctx.run_id / "passive"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "traffic-summary.json"
+    path.write_text(json.dumps({"rules": rules, "cases": [tc.test_case_id for tc, _ in results]}, indent=1))
+    await ctx.add_evidence("passive_summary", str(path), "PASSIVE-TRAFFIC")
+
+
 async def record_issues(ctx: RunCtx, issues: list[passive.Issue]) -> int:
     """Each passive issue becomes a confirmed finding (it is a deterministic fact) with its exact evidence on file."""
     n = 0
     out_dir = Path(ctx.evidence_dir) / ctx.run_id / "passive"
     out_dir.mkdir(parents=True, exist_ok=True)
-    for i in issues:
-        case_id = f"PASSIVE-{i.rule}"
-        path = out_dir / f"{i.rule}.json"
+    for index, i in enumerate(issues):
+        source = "REPO" if i.rule.startswith(("osv:", "gitleaks:")) else "PERF" if i.rule.startswith(("lighthouse:", "web-vitals:")) else "AXE" if i.rule.startswith("axe:") else "PASSIVE"
+        case_id = f"{source}-{i.rule}"
+        path = out_dir / f"{re.sub(r'[^A-Za-z0-9_-]', '_', i.rule)[:70]}-{index}.json"
         path.write_text(json.dumps({"rule": i.rule, "message": i.message, **i.evidence}, indent=1, default=str))
         eid = await ctx.add_evidence("passive_check", str(path), case_id)
-        tc = TestCase(test_case_id=case_id, title=i.title, requirement_ref="PASSIVE",
+        tc = TestCase(test_case_id=case_id, title=i.title, requirement_ref=source,
                       steps=[{"action": "goto", "target": i.path or "/"}], expected_result=i.message,
                       assertions=[{"kind": "status", "subject": i.path or "/", "op": "lte", "expected": 399}], risk="low")
-        verdict = Verdict(status="confirmed", rule=f"passive:{i.rule}", reproduced="deterministic",
+        verdict = Verdict(status="confirmed", rule=i.rule if i.rule.startswith(("zap:", "axe:", "osv:", "gitleaks:", "lighthouse:", "web-vitals:")) else f"passive:{i.rule}",
+                          reproduced="deterministic",
                           checks={"V4": True, "V7": True}, explanation=i.message, explanation_by="rules")
-        fid = await ctx.add_finding(tc, CaseResult(test_case_id=case_id, outcome="failed"), verdict, None, [eid], None,
+        cited = [eid, *i.evidence_ids]
+        fid = await ctx.add_finding(tc, CaseResult(test_case_id=case_id, outcome="failed"), verdict, None, cited, None,
                                     category=i.category, severity=i.severity)
         await ctx.log("det", "finding", f"{fid}: {i.title} [check {i.rule}]", "failed" if i.severity != "low" else "warn",
-                      {"rule": i.rule, "category": i.category}, [eid])
+                      {"rule": i.rule, "category": i.category}, cited)
         n += 1
     return n
 

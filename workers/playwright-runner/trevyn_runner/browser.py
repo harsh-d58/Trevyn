@@ -8,7 +8,7 @@ from playwright.async_api import Error
 
 async def launch(pw, browser_name: str = "chromium", *, headless: bool = True):
     channel = os.getenv("PLAYWRIGHT_CHANNEL")
-    if channel:
+    if channel and browser_name == "chromium":  # channels (chrome, msedge) exist only for Chromium
         return await getattr(pw, browser_name).launch(channel=channel, headless=headless)
     try:
         return await getattr(pw, browser_name).launch(headless=headless)

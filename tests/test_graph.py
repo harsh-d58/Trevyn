@@ -58,8 +58,20 @@ def ran(monkeypatch):
 
     async def no_passive(ctx, target, paths):
         return []
+    async def no_zap(ctx, target):
+        return []
+    async def no_compat(ctx, cases, target):
+        return None
+    async def no_repo(ctx, url, sha):
+        return []
+    async def no_performance(ctx, target, paths):
+        return []
     monkeypatch.setattr(pl, "run_cases", fake_run_cases)
     monkeypatch.setattr(pl, "passive_lane", no_passive)  # no network in unit tests
+    monkeypatch.setattr(pl, "zap_lane", no_zap)
+    monkeypatch.setattr(pl, "compat_lane", no_compat)
+    monkeypatch.setattr(pl, "repo_lane", no_repo)
+    monkeypatch.setattr(pl, "performance_lane", no_performance)
     return seen
 
 

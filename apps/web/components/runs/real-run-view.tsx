@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/kit/page-header"
 import { Pill, type Tone } from "@/components/kit/pills"
 import { Button } from "@/components/ui/button"
 import { api, API_URL, type ApiEvent, type ApiRun, type Items } from "@/lib/api"
+import { useLive } from "@/lib/live"
 import { notify } from "@/lib/notify"
 import { cn } from "@/lib/utils"
 import { GraphMap, LanesPanel, ScreenshotStrip, useRunGraph } from "./run-graph"
@@ -20,6 +21,7 @@ const ACTOR_TONE: Record<string, Tone> = { ai: "ai", det: "det", human: "human" 
 export function LiveRunsPanel({ runId }: { runId?: string }) {
   const [runs, setRuns] = useState<ApiRun[]>([])
   const [error, setError] = useState("")
+  const scope = useLive((s) => s.scope) // the run picker's choice is the default selection
   const [autoSelected, setAutoSelected] = useState<string>()
   useEffect(() => {
     let mounted = true
@@ -37,7 +39,7 @@ export function LiveRunsPanel({ runId }: { runId?: string }) {
     return () => { mounted = false; clearInterval(timer) }
   }, [])
   const selected = runId ? runs.find((r) => r.uuid === runId || r.id === runId)
-    : runs.find((r) => r.uuid === autoSelected) ?? runs.find(active) ?? runs[0]
+    : runs.find((r) => r.uuid === scope) ?? runs.find((r) => r.uuid === autoSelected) ?? runs.find(active) ?? runs[0]
   const selectedId = selected?.uuid ?? runId
   return <div className="grid gap-4">
     <Card title={`Live runs · ${runs.filter(active).length} active`} caption="Each run has its own event stream and progress">

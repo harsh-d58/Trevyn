@@ -7,7 +7,7 @@ import os
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trevyn_contracts import Target, TestCase
@@ -40,6 +40,14 @@ DEMO_PATCHES = {
                  "--- a/demo_shop/app.py\n+++ b/demo_shop/app.py\n@@ def save_profile(...):\n"
                  "+    c.execute(\"UPDATE users SET name=? WHERE id=?\", (name, u[\"id\"]))\n"),
 }
+# AI plans name their cases freely, so a finding is matched to its planted bug by what it observed, not by case id
+DEMO_BUG_SIGNS = {"CHECKOUT-014": ("post /api/orders", "orders: observed"), "CART-011": ("negative", "quantity"),
+                  "AUTH-003": ("unknown user", "user enumeration"), "REG-002": ("email",), "PROF-004": ("display name", "profile")}
+
+
+def demo_patch_for(f) -> tuple | None:
+    seen = f"{f.title} {f.actual}".lower()
+    return next((DEMO_PATCHES[k] for k, signs in DEMO_BUG_SIGNS.items() if any(sg in seen for sg in signs)), None)
 COLUMN = {"proposed": "approval", "approved": "regression", "rejected": "investigating", "verified": "verified", "failed": "investigating"}
 
 
@@ -93,7 +101,7 @@ async def propose(fid: str, request: Request, s: AsyncSession = Depends(session)
         raise Problem(409, "conflict", f"{MAX_ATTEMPTS} attempts used; the finding was escalated to a human owner")
     run = await s.get(Run, f.run_id)
     env = await s.get(Environment, run.environment_id)
-    entry = DEMO_PATCHES.get(f.test_case_id)
+    entry = DEMO_PATCHES.get(f.test_case_id) or demo_patch_for(f)
     if not (entry and env.local_runner and env.hook_url):
         raise Problem(422, "repo_required", "No repository is connected to this project, so Trevyn cannot patch it. Use the repair prompt on the finding.")
     flag, path, summary, diff = entry

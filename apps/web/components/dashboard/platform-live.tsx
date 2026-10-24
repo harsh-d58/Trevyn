@@ -33,7 +33,10 @@ function usePlatform() {
 
 /** Live mode: the real LangGraph map of the newest run, refetched as its state and progress change. */
 function LivePipeline() {
-  const run = useLive((s) => s.run)
+  const latest = useLive((s) => s.run)
+  const scoped = useLive((s) => s.runs.find((r) => r.uuid === s.scope))
+  // the picked run, else the newest one
+  const run = scoped ? { uuid: scoped.uuid, id: scoped.id, name: scoped.name, apiState: scoped.state, done: scoped.passed } : latest
   const [graph, setGraph] = useState<Graph | null>(null)
   const uuid = run?.uuid, tick = `${run?.apiState}:${run?.done}`
   useEffect(() => {

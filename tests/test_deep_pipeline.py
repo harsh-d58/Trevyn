@@ -48,6 +48,9 @@ def stubs(monkeypatch):
         return [passive.Response(url="https://shop.test/", status=200, headers={"Server": "nginx/1.25.3"},
                                  cookies=["session=abc; Path=/"])]
 
+    async def fake_zap(url, out_dir, hosts):
+        return None, [], "Docker unavailable in test"
+
     async def no_diag(tc, case_, ev):
         from trevyn_contracts import Diagnosis, Hypothesis
         return Diagnosis(hypotheses=[Hypothesis(statement="x", confidence="low")]), None, "rules"
@@ -56,6 +59,18 @@ def stubs(monkeypatch):
         return "fix it", None
     monkeypatch.setattr(pl, "run_job", fake_run_job)
     monkeypatch.setattr(passive, "fetch_pages", fake_fetch)
+    monkeypatch.setattr(pl.zap, "run_baseline", fake_zap)
+    async def no_compat(ctx, cases, target):
+        await pl.lane(ctx, "compat", 1, 1, "warn", "not run in unit test")
+    monkeypatch.setattr(pl, "compat_lane", no_compat)
+    async def no_repo(ctx, url, sha):
+        await pl.lane(ctx, "repo", 1, 1, "ok", "not applicable")
+        return []
+    monkeypatch.setattr(pl, "repo_lane", no_repo)
+    async def no_performance(ctx, target, paths):
+        await pl.lane(ctx, "performance", 1, 1, "warn", "not run in unit test")
+        return []
+    monkeypatch.setattr(pl, "performance_lane", no_performance)
     monkeypatch.setattr(pl.dx, "diagnose", no_diag)
     monkeypatch.setattr(pl.dx, "repair_prompt", no_prompt)
     return calls
@@ -74,11 +89,11 @@ async def test_parallel_lanes_passive_findings_and_safe_retest(tmp_path, stubs):
     # safe retest: the read-only failure repeats, the one that creates an order does not
     assert stubs == ["TC-1", "TC-2", "TC-3", "TC-2-repeat"]
     nodes = {(d["node"], d["phase"]) for k, d in ctx.data if k == "node"}
-    for n in ("intake", "recon.site_map", "gate", "lane_ui", "lane_passive", "verify.classify", "verify.record", "report"):
+    for n in ("intake", "recon.site_map", "gate", "lane_ui", "lane_passive", "lane_zap", "lane_compat", "lane_repo", "lane_performance", "verify.classify", "verify.record", "report"):
         assert (n, "end") in nodes, n
     assert ("recon.repo_map", "start") not in nodes  # gray box only
     lanes = {d["lane"] for k, d in ctx.data if k == "lane"}
-    assert lanes == {"ui", "security_passive"}
+    assert lanes == {"ui", "security_passive", "security_zap", "compat", "repo", "performance"}
     sec = {f["case"]: f for f in ctx.findings if f["case"].startswith("PASSIVE-")}
     assert {"PASSIVE-P1", "PASSIVE-P2", "PASSIVE-P3", "PASSIVE-P4", "PASSIVE-P5", "PASSIVE-P6"} <= set(sec)
     assert sec["PASSIVE-P1"] == {"case": "PASSIVE-P1", "status": "confirmed", "category": "security", "severity": "medium"}

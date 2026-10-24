@@ -8,6 +8,7 @@ import { Pill } from "@/components/kit/pills"
 import { Button } from "@/components/ui/button"
 import { API_URL, apiEnabled } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useLive } from "@/lib/live"
 
 type Msg = { role: "user" | "assistant"; content: string }
 
@@ -18,6 +19,8 @@ export function Copilot({ source }: { source: "live" | "demo" }) {
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
   const findingId = path.match(/^\/findings\/([^/]+)/)?.[1]
+  const runId = useLive((s) => s.scope)
+  const runLabel = useLive((s) => s.runs.find((r) => r.uuid === s.scope)?.id)
 
   const send = async () => {
     const q = input.trim()
@@ -30,7 +33,7 @@ export function Copilot({ source }: { source: "live" | "demo" }) {
     try {
       const res = await fetch(`${API_URL}/api/assistant/chat`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: q, history, finding_id: findingId }),
+        body: JSON.stringify({ message: q, history, finding_id: findingId, run_id: runId }),
       })
       if (!res.ok || !res.body) {
         append((await res.json().catch(() => ({}))).detail ?? "The copilot is unavailable.")
@@ -66,7 +69,7 @@ export function Copilot({ source }: { source: "live" | "demo" }) {
       {open && (
         <aside className="glass fixed right-5 bottom-5 z-50 flex h-[520px] w-[380px] max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-2xl shadow-2xl" aria-label="QA copilot">
           <header className="flex items-center justify-between border-b border-white/40 px-4 py-3">
-            <div><b className="text-sm">QA copilot</b><p className="text-[11px] text-muted-foreground">Answers only from your runs and findings{findingId ? ` · focused on ${findingId}` : ""}</p></div>
+            <div><b className="text-sm">QA copilot</b><p className="text-[11px] text-muted-foreground">{runId ? `Focused on ${runLabel ?? "the selected run"}` : "Answers from saved runs"}{findingId ? ` · finding ${findingId}` : ""}</p></div>
             <button aria-label="Close copilot" onClick={() => setOpen(false)} className="rounded-md p-1 hover:bg-white/40"><X size={16} /></button>
           </header>
           <div className="flex-1 space-y-2 overflow-auto px-4 py-3 text-[13px]">

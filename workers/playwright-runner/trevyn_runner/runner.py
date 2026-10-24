@@ -3,6 +3,7 @@ Exit/`status` is infra-level only: failed assertions are data, not errors."""
 from __future__ import annotations
 
 import json
+import platform
 import re
 import time
 from datetime import UTC, datetime
@@ -23,12 +24,34 @@ def redact(text: str) -> str:
     return SECRET_RE.sub("[REDACTED]", text)
 
 
+def sanitize_har(path: Path) -> None:
+    """Keep HAR timings/statuses while stripping credentials and request/response bodies."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for entry in data.get("log", {}).get("entries", []):
+        for side in (entry.get("request", {}), entry.get("response", {})):
+            side["cookies"] = []
+            side.pop("postData", None)
+            if "content" in side:
+                content = side["content"]
+                side["content"] = {"size": content.get("size", 0), "mimeType": content.get("mimeType", "")}
+            # Headers can carry arbitrary application secrets; HAR links only need timing metadata.
+            side["headers"] = []
+            side["headersSize"] = -1
+            if isinstance(side.get("url"), str):
+                u = urlparse(side["url"])
+                side["url"] = u._replace(query="", fragment="").geturl()
+        entry.get("request", {})["queryString"] = []
+    path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+
+
 def on_response(net: list[dict], r, t_ms: int | None = None) -> None:
     """Records the status (and time to response, `ms`) on the matching request, and where a redirect points so
     status checks can follow it."""
     for n in reversed(net):
         if n["url"] == redact(r.url) and "status" not in n:
             n["status"] = r.status
+            size = r.headers.get("content-length")
+            n["responseBytes"] = int(size) if size and size.isdigit() else None
             if t_ms is not None:
                 n["ms"] = max(0, t_ms - n["t"])
             if 300 <= r.status < 400 and (loc := r.headers.get("location")):
@@ -50,11 +73,15 @@ def final_status(net: list[dict], path: str) -> int | None:
 
 def locate(page: Page, target: str):
     kind, _, rest = target.partition("=")
+    unquote = lambda v: v.strip().strip("'\"")  # noqa: E731 - planners write name='Active' as often as name=Active
     if kind == "role":
         m = re.match(r"(\w+)(?:\[name=(.+)\])?$", rest)
-        role, name = (m.group(1), m.group(2)) if m else (rest, None)
+        role, name = (m.group(1), unquote(m.group(2)) if m.group(2) else None) if m else (rest, None)
         return page.get_by_role(role, name=name, exact=False) if name else page.get_by_role(role)
-    return {"label": lambda: page.get_by_label(rest), "testid": lambda: page.get_by_test_id(rest),
+    if kind in ("label", "text", "testid"):
+        rest = unquote(rest)
+    # label= also matches a field's placeholder: many inputs (TodoMVC's "What needs to be done?") have no <label>
+    return {"label": lambda: page.get_by_label(rest).or_(page.get_by_placeholder(rest)), "testid": lambda: page.get_by_test_id(rest),
             "text": lambda: page.get_by_text(rest), "css": lambda: page.locator(rest)}.get(kind, lambda: page.locator(target))()
 
 
@@ -100,12 +127,29 @@ async def hook_reset(job: RunnerJob) -> bool:
         return (await c.post(f"{job.target.hook_url}/reset", headers=headers)).status_code == 200
 
 
-async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResult:
+async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path, device: dict | None = None) -> CaseResult:
     allowed = set(job.target.allowed_hosts)
     res = CaseResult(test_case_id=tc.test_case_id, outcome="passed")
     net: list[dict] = []
     console: list[dict] = []
-    ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+    har = out / f"{tc.test_case_id}-network.har"
+    viewport = job.viewport or (device or {}).get("viewport") or {"width": 1280, "height": 800}
+    context_options = {"viewport": viewport, "record_har_path": str(har), "record_har_content": "omit"}
+    if job.mobile:
+        context_options.update(is_mobile=True, has_touch=True,
+                               device_scale_factor=(device or {}).get("device_scale_factor", 3),
+                               user_agent=(device or {}).get("user_agent"))
+    ctx = await browser.new_context(**context_options)
+    if job.browser == "chromium":
+        vitals_script = (Path(__file__).parent / "vendor" / "web-vitals.iife.js").read_text(encoding="utf-8")
+        vitals_script += """\nwindow.__trevynVitals = {};
+          for (const name of ['LCP','CLS','INP','TTFB']) {
+            const observe = webVitals?.['on' + name];
+            if (observe) observe(metric => { window.__trevynVitals[name] =
+              {name, value: metric.value, rating: metric.rating}; }, {reportAllChanges: true});
+          }
+        """
+        await ctx.add_init_script(script=vitals_script)
 
     async def guard(route):
         host = urlparse(route.request.url).hostname or ""
@@ -120,6 +164,7 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
     page = await ctx.new_page()
     t0 = time.monotonic()
     page.on("request", lambda r: net.append({"t": int((time.monotonic() - t0) * 1000), "method": r.method,
+                                             "resourceType": r.resource_type,
                                              "path": urlparse(r.url).path, "url": redact(r.url)}))
     page.on("response", lambda r: on_response(net, r, int((time.monotonic() - t0) * 1000)))
     page.on("requestfailed", lambda r: setattr(res, "failed_requests", res.failed_requests + 1))
@@ -127,6 +172,8 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
     page.on("pageerror", lambda e: console.append({"type": "error", "text": redact(str(e))}))
 
     baselines: dict[str, int | None] = {}
+    axe_reports: list[dict] = []
+    vitals_reports: list[dict] = []
     for a in tc.assertions:
         if a.kind == "db_row_count":
             baselines[a.subject] = await hook_count(job, a.subject)
@@ -141,6 +188,32 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
                     raise PermissionError(f"target {url} not on allowlist")
                 await page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 await settle(page)
+                if job.browser == "chromium":
+                    try:
+                        metrics = await page.evaluate("window.__trevynVitals || {}")
+                        vitals_reports.append({"path": urlparse(url).path or "/", "metrics": metrics})
+                    except Exception:
+                        vitals_reports.append({"path": urlparse(url).path or "/", "not_run": "capture unavailable"})
+                    try:
+                        await page.add_script_tag(path=str(Path(__file__).parent / "vendor" / "axe.min.js"))
+                        violations = await page.evaluate("""async () => {
+                          const result = await window.axe.run(document, {runOnly: {type: 'tag',
+                            values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']}});
+                          return result.violations.map(v => ({id: v.id, impact: v.impact, help: v.help,
+                            helpUrl: v.helpUrl, tags: v.tags, nodes: v.nodes.length}));
+                        }""")
+                        axe_reports.append({"path": urlparse(url).path or "/", "violations": violations})
+                    except Exception as exc:
+                        axe_reports.append({"path": urlparse(url).path or "/", "not_run": type(exc).__name__})
+                try:
+                    sr.navigation = await page.evaluate("""() => {
+                      const n = performance.getEntriesByType('navigation')[0];
+                      return n ? {domContentLoadedMs: Math.round(n.domContentLoadedEventEnd),
+                        loadMs: Math.round(n.loadEventEnd), responseStartMs: Math.round(n.responseStart),
+                        transferBytes: n.transferSize || null} : null;
+                    }""")
+                except Exception:
+                    pass  # a missing performance entry must not turn a successful navigation into a failed test
             elif s.action == "reset":
                 sr.ok = await hook_reset(job)
                 for k in baselines:
@@ -149,7 +222,11 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
                 await locate(page, s.target).first.wait_for(timeout=8000)
             else:
                 loc = locate(page, s.target).first
-                if s.action == "click":
+                if s.action in ("click", "dblclick") and await loc.count() and await loc.is_disabled():
+                    # a repeat click on a control the app disabled (e.g. "Place order" after the first click) is ignored
+                    # by the browser for a real user too; it is not a test error
+                    sr.error = None
+                elif s.action == "click":
                     await loc.click(timeout=8000)
                 elif s.action == "dblclick":
                     await loc.dblclick(timeout=8000)
@@ -229,9 +306,27 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
     (out / f"{tc.test_case_id}-console.json").write_text(json.dumps(console, indent=1))
     res.artefacts["network"] = str(out / f"{tc.test_case_id}-network.json")
     res.artefacts["console"] = str(out / f"{tc.test_case_id}-console.json")
+    if axe_reports:
+        axe_path = out / f"{tc.test_case_id}-axe.json"
+        axe_path.write_text(json.dumps(axe_reports, separators=(",", ":")), encoding="utf-8")
+        res.artefacts["axe"] = str(axe_path)
+    if vitals_reports:
+        try:
+            vitals_reports[-1]["metrics"] = await page.evaluate("window.__trevynVitals || {}")
+        except Exception:
+            pass
+        vitals_path = out / f"{tc.test_case_id}-vitals.json"
+        vitals_path.write_text(json.dumps(vitals_reports, separators=(",", ":")), encoding="utf-8")
+        res.artefacts["web_vitals"] = str(vitals_path)
     await ctx.tracing.stop(path=out / f"{tc.test_case_id}-trace.zip")
     res.artefacts["trace"] = str(out / f"{tc.test_case_id}-trace.zip")
     await ctx.close()
+    if har.is_file():
+        try:
+            sanitize_har(har)
+            res.artefacts["har"] = str(har)
+        except (OSError, ValueError, TypeError):
+            har.unlink(missing_ok=True)  # never publish an unsanitized HAR
     return res
 
 
@@ -242,8 +337,12 @@ async def run_job(job: RunnerJob) -> RunnerResult:
     try:
         async with async_playwright() as pw:
             browser = await launch(pw, job.browser, headless=job.headless)
+            device = pw.devices.get("iPhone 13") if job.mobile else None
+            result.environment = {"browser": job.browser, "version": browser.version,
+                                  "os": platform.system(), "os_version": platform.release(),
+                                  "viewport": job.viewport or (device or {}).get("viewport") or {"width": 1280, "height": 800}}
             for tc in job.test_cases:
-                result.cases.append(await run_case(browser, job, tc, out))
+                result.cases.append(await run_case(browser, job, tc, out, device))
             await browser.close()
     except Exception as e:
         result.status, result.error = "infra_error", f"{type(e).__name__}: {e}"

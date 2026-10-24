@@ -28,7 +28,7 @@ from trevyn_orch.models import ModelUnavailable, adapter, observed  # noqa: E402
 from trevyn_runner.discover import discover  # noqa: E402
 from trevyn_contracts import SiteMap  # noqa: E402
 
-from . import events, auth, insights, integrations, manifest, plans_ext, policy, repairs, repositories, runs, storage, targets  # noqa: E402
+from . import events, auth, diagrams, insights, integrations, manifest, plans_ext, policy, repairs, repositories, run_views, runs, storage, targets  # noqa: E402
 from .common import Problem, get_or_404  # noqa: E402
 from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run, SiteMapRecord,  # noqa: E402
                  RunEvent, Session, init_db, now, session)
@@ -183,7 +183,9 @@ async def site_snapshot(s: AsyncSession, proj: Project, env: Environment, *, ref
         raise Problem(503, "discovery_failed", f"Site scan failed: {type(exc).__name__}") from exc
     record = SiteMapRecord(project_id=proj.id, environment_id=env.id, content=mapped.model_dump())
     s.add(record)
-    await s.flush()
+    # Commit now: the scan is a finished fact, and plan creation next waits on the AI and records its cost in another
+    # session. Holding this write open blocked that insert (SQLite: "database is locked") and kept a long transaction.
+    await s.commit()
     return record
 
 
@@ -284,7 +286,7 @@ def run_json(r: Run) -> dict:
     web_status = "running" if r.state not in runs.TERMINAL else (
         "stopped" if r.state in ("CANCELLED", "BLOCKED", "FAILED") else "failed" if c.get("failed") else
         "warn" if c.get("inconclusive") else "passed")
-    return {"id": r.display_id, "uuid": r.id, "name": r.name, "type": "ui", "state": r.state, "status": web_status,
+    return {"id": r.display_id, "uuid": r.id, "project_id": r.project_id, "name": r.name, "type": "ui", "state": r.state, "status": web_status,
             "passed": c.get("passed", 0), "total": total, "counts": c, "duration": f"{dur // 60}m {dur % 60:02d}s",
             "trigger": r.trigger, "started": aware(r.started_at).isoformat(), "people": ["AC"]}
 
@@ -328,8 +330,12 @@ async def create_run(s: AsyncSession, plan: Plan, name: str | None = None, idemp
 
 
 @app.get("/api/runs")
-async def list_runs(limit: int = 50, s: AsyncSession = Depends(session)):
-    return {"items": [run_json(r) for r in (await s.scalars(select(Run).order_by(Run.started_at.desc()).limit(limit))).all()]}
+async def list_runs(limit: int = 50, project: str | None = None, s: AsyncSession = Depends(session)):
+    query = select(Run).order_by(Run.started_at.desc()).limit(max(1, min(limit, 200)))
+    if project:
+        await get_or_404(s, Project, project)
+        query = query.where(Run.project_id == project)
+    return {"items": [run_json(r) for r in (await s.scalars(query)).all()]}
 
 
 @app.get("/api/runs/{run_id}")
@@ -401,10 +407,12 @@ def finding_json(f: Finding, run_display: str = "") -> dict:
 
 
 @app.get("/api/findings")
-async def list_findings(status: str | None = None, s: AsyncSession = Depends(session)):
+async def list_findings(status: str | None = None, run: str | None = None, s: AsyncSession = Depends(session)):
     q = select(Finding, Run.display_id).join(Run, Run.id == Finding.run_id).order_by(Finding.created_at.desc())
     if status:
         q = q.where(Finding.status == status)
+    if run:  # uuid or display id
+        q = q.where((Run.id == run) | (Run.display_id == run))
     return {"items": [finding_json(f, rd) for f, rd in (await s.execute(q)).all()]}
 
 
@@ -463,16 +471,25 @@ async def get_evidence_url(eid: str, request: Request, s: AsyncSession = Depends
 
 
 # ---------- approvals ----------
-def approval_json(a: Approval) -> dict:
+def approval_json(a: Approval, run: Run | None = None, project: Project | None = None) -> dict:
+    """`run`/`runUuid` are set for run gates so any page can decide the gate of the run it shows."""
     cat = {"run_gate": "High-impact tests", "patch": "Accepting patches", "plan": "Uncertain diagnoses"}.get(a.subject_type, "Release and risk calls")
-    return {"id": a.display_id, "uuid": a.id, "title": a.title, "why": a.reason, "category": cat, "project": "ShopFlow Commerce",
+    return {"id": a.display_id, "uuid": a.id, "title": a.title, "why": a.reason, "category": cat, "project": project.name if project else "",
+            "run": run.display_id if run else None, "runUuid": run.id if run else None,
             "priority": "urgent" if a.risk == "high" else "low", "risk": a.risk, "status": a.status, "when": a.created_at.isoformat(), "who": "AC"}
 
 
 @app.get("/api/approvals")
-async def list_approvals(status: str = "pending", s: AsyncSession = Depends(session)):
-    rows = (await s.scalars(select(Approval).where(Approval.status == status).order_by(Approval.created_at.desc()))).all()
-    return {"items": [approval_json(a) for a in rows]}
+async def list_approvals(status: str = "pending", run: str | None = None, s: AsyncSession = Depends(session)):
+    q = select(Approval).order_by(Approval.created_at.desc())
+    if status != "all":
+        q = q.where(Approval.status == status)
+    rows = (await s.scalars(q)).all()
+    runs_by_id = {r.id: r for r in (await s.scalars(select(Run).where(Run.id.in_([a.subject_id for a in rows if a.subject_type == "run_gate"])))).all()}
+    if run:  # one run's gates, by uuid or display id
+        rows = [a for a in rows if a.subject_type == "run_gate" and (a.subject_id == run or getattr(runs_by_id.get(a.subject_id), "display_id", None) == run)]
+    projects = {p.id: p for p in (await s.scalars(select(Project))).all()}
+    return {"items": [approval_json(a, runs_by_id.get(a.subject_id), projects.get(a.project_id)) for a in rows]}
 
 
 class DecisionIn(BaseModel):
@@ -530,12 +547,20 @@ class ChatIn(BaseModel):
 async def chat(body: ChatIn, s: AsyncSession = Depends(session)):
     if not adapter.available:
         raise Problem(503, "model_unavailable", "Set ANTHROPIC_API_KEY to enable the copilot")
-    snap: dict = {"summary": await summary(s), "findings": (await list_findings(None, s))["items"][:30],
-                  "runs": (await list_runs(10, s))["items"]}
+    if body.run_id:
+        bundle = await run_views.load_run_bundle(s, body.run_id)
+        selected = bundle["run"]
+        snap: dict = {"run": run_json(selected),
+                      "plan": {"requirement": bundle["plan"].requirement,
+                               "cases": bundle["plan"].test_cases} if bundle["plan"] else None,
+                      "findings": [{"id": f.display_id, "title": f.title, "status": f.status,
+                                    "severity": f.severity, "diagnosis": f.diagnosis} for f in bundle["findings"][:30]],
+                      "events": [runs.event_json(e) for e in bundle["evs"][-80:]]}
+    else:
+        snap = {"summary": await summary(s), "findings": (await list_findings(None, s))["items"][:30],
+                "runs": (await list_runs(limit=10, s=s))["items"]}
     if body.finding_id:
         snap["focus_finding"] = await get_finding(body.finding_id, s)
-    if body.run_id:
-        snap["focus_run_events"] = (await run_events(body.run_id, 0, s))["items"][-80:]
     history = [m for m in body.history if m.get("role") in ("user", "assistant") and m.get("content")][-12:]
     messages = history + [{"role": "user", "content": observed("workspace", json.dumps(snap, default=str)) + "\n\n" + body.message}]
 
@@ -555,5 +580,5 @@ async def chat(body: ChatIn, s: AsyncSession = Depends(session)):
 
 
 # routers added in the core build (auth, plans, repairs, manifest, insights)
-for _r in (auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router, events.router):
+for _r in (auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router, events.router, run_views.router, diagrams.router):
     app.include_router(_r)

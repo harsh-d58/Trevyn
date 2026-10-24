@@ -45,6 +45,7 @@ export type Finding = {
 export type RunStatus = "running" | "passed" | "failed" | "warn" | "stopped"
 export type RunSummary = {
   id: string
+    project_id?: string
   /** stable row id from the API; display ids were not unique before migration 0006 */
   uuid?: string
   name: string
@@ -66,6 +67,8 @@ export type ScriptEntry = { stage: 0 | 1 | 2 | 3 | 4; kind: LogKind; text: strin
 
 export type Approval = {
   id: string
+  /** live API: the run this gate belongs to (run gates only) */
+  run?: string | null; runUuid?: string | null
   title: string
   why: string
   category: "Accepting patches" | "High-impact tests" | "Uncertain diagnoses" | "Release and risk calls"
@@ -89,4 +92,4 @@ export type DashboardSummary = {
 }
 
 /** everything the live store is seeded with (one request in production) */
-export type Workspace = { summary: DashboardSummary; findings: Finding[]; runs: RunSummary[]; approvals: Approval[]; source?: "live" | "demo" }
+  export type Workspace = { summary: DashboardSummary; findings: Finding[]; runs: RunSummary[]; approvals: Approval[]; source?: "live" | "demo"; /** selected run uuid; null = all runs */ scope?: string | null; project?: string | null }

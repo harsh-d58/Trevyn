@@ -1,7 +1,7 @@
 "use client"
 // Top chrome: workspace pill (left), dynamic island (centre, fixed), floating action cluster (right).
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { Bell, Check, ChevronDown, CirclePlay, FlaskConical, FolderKanban, ListChecks, Menu, Palette, Plus, Repeat, Search } from "lucide-react"
 import { useEffect, useState } from "react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -10,11 +10,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { api, type Items } from "@/lib/api"
 import { NOTIFICATIONS } from "@/lib/data"
 import { DEMO_PROJECTS } from "@/lib/demo/core"
-import { describeEvent, useLive, type WorkspaceEvent } from "@/lib/live"
+import { describeEvent, useLive, useLiveStore, type WorkspaceEvent } from "@/lib/live"
 import { notify } from "@/lib/notify"
 import { RAIL_MAIN, RAIL_UTILITY, isGroup } from "@/lib/nav"
 import { Appearance } from "./appearance"
 import { Island } from "./island"
+import { RunScope } from "./run-scope"
 import { SectionTabs } from "./section-tabs"
 import { Wordmark } from "./wordmark"
 import { UserMenu } from "./user-menu"
@@ -46,6 +47,9 @@ function useShellData(notifOpen: boolean) {
 const iconBtn = "press press-icon pulse grid size-9 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-white/80 hover:text-foreground"
 
 export function TopBar({ onSearch }: { onSearch: () => void }) {
+  const router = useRouter()
+  const store = useLiveStore()
+  const selectedProject = useLive((s) => s.project)
   const [unread, setUnread] = useState(true)
   const [notif, setNotif] = useState(false)
   const [menu, setMenu] = useState(false)
@@ -59,10 +63,10 @@ export function TopBar({ onSearch }: { onSearch: () => void }) {
         <Wordmark className="hidden md:flex" />
         {home && <div className="hidden md:block"><SectionTabs layout="tab-active-top" /></div>}
         <DropdownMenu>
-          <DropdownMenuTrigger render={<button className={`press glass-2 h-11 items-center gap-2 rounded-full pr-3 pl-1.5 text-[13px] font-medium ${home ? "flex md:hidden" : "flex"}`} />}>
+          <DropdownMenuTrigger render={<button aria-label="Choose project" className={`press glass-2 h-11 items-center gap-2 rounded-full pr-3 pl-1.5 text-[13px] font-medium ${home ? "flex md:hidden" : "flex"}`} />}>
             {shell.real ? <>
               <span className="grid size-8 place-items-center rounded-full bg-[hsl(222_80%_94%)] text-[12px] font-bold text-brand">{shell.projects.length}</span>
-              <span className="hidden sm:inline">All projects</span>
+              <span className="hidden sm:inline max-w-36 truncate">{shell.projects.find((p) => p.id === selectedProject)?.name ?? "All projects"}</span>
               <span className="rounded-full bg-det/15 px-2 py-0.5 text-[10px] font-bold tracking-wider text-det">LIVE</span>
             </> : <>
               <span className="grid size-8 place-items-center rounded-full bg-[hsl(222_80%_94%)] text-[12px] font-bold text-brand">S</span>
@@ -73,11 +77,12 @@ export function TopBar({ onSearch }: { onSearch: () => void }) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={10} className="glass-2 w-72 rounded-2xl bg-[var(--g2)] p-1.5 ring-0">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>{shell.real ? "Projects · pages show all of them" : "Projects"}</DropdownMenuLabel>
+              <DropdownMenuLabel>{shell.real ? "Show project" : "Projects"}</DropdownMenuLabel>
               {shell.real && shell.projects.map((p) => (
-                <DropdownMenuItem key={p.id} render={<Link href="/projects" />}>
+                <DropdownMenuItem key={p.id} onClick={() => { void store.setProject(p.id).then(() => router.refresh()).catch((e: Error) => notify(e.message, "bad")) }}>
                   <span className="grid size-6 place-items-center rounded-md bg-brand/10 text-[11px] font-bold text-brand">{p.name[0]?.toUpperCase()}</span>
                   <span className="min-w-0 flex-1"><span className="block truncate">{p.name}</span><span className="block truncate text-[11px] text-muted-foreground">{p.environments[0]?.name} · {host(p.environments[0]?.base_url)}</span></span>
+                  {selectedProject === p.id && <Check className="text-brand" />}
                 </DropdownMenuItem>
               ))}
               {shell.real && !shell.projects.length && <DropdownMenuItem render={<Link href="/runs/new" />}>No projects yet · start a run</DropdownMenuItem>}
@@ -97,6 +102,8 @@ export function TopBar({ onSearch }: { onSearch: () => void }) {
 
         <Island />
 
+        <div className="flex gap-2">
+        <RunScope />
         <div className="glass-2 flex h-11 items-center gap-0.5 rounded-full px-1">
           <button onClick={onSearch} className="press pulse hidden h-9 items-center gap-2 rounded-full pr-1.5 pl-3 text-[13px] text-muted-foreground hover:bg-white/80 lg:flex">
             <Search size={15} />Search
@@ -123,6 +130,7 @@ export function TopBar({ onSearch }: { onSearch: () => void }) {
             {(shell.real ? shell.unread : unread) && <span className="absolute top-2 right-2.5 size-2 rounded-full bg-bad ring-2 ring-white" />}
           </button>
           <span className="ml-0.5 hidden sm:block"><UserMenu /></span>
+        </div>
         </div>
       </header>
 

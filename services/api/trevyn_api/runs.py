@@ -236,9 +236,11 @@ async def _load(run_id: str) -> tuple[Run, rg.Deps]:
                         hook_token=os.getenv("TREVYN_HOOK_TOKEN") or None)
         site = await s.get(SiteMapRecord, plan.site_map_id) if getattr(plan, "site_map_id", None) else None
     paths = [p.get("path", "/") for p in ((site.content or {}).get("pages", []) if site else [])]
-    repo_files = len((getattr(plan, "repository_map", None) or {}).get("files", []) or [])
+    repo_files = (getattr(plan, "repository_map", None) or {}).get("file_count", 0)
     return run, rg.Deps(ctx=Ctx(run), cases=[TestCase.model_validate(tc) for tc in plan.test_cases], target=target,
-                        mode=plan.test_mode or "black_box", site_paths=paths, repo_files=repo_files)
+                        mode=plan.test_mode or "black_box", site_paths=paths, repo_files=repo_files,
+                        repo_url=proj.repository_url if plan.test_mode == "gray_box" else None,
+                        repo_sha=plan.repository_sha if plan.test_mode == "gray_box" else None)
 
 
 async def _invoke(run_id: str, deps: rg.Deps, payload) -> None:

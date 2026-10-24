@@ -76,6 +76,8 @@ async def discover(base_url: str, allowed_hosts: list[str], *, max_pages: int = 
                         raise ValueError("page redirected outside the allowed origin")
                     data = await page.evaluate("""() => {
                       const clean = s => (s || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+                      // hidden controls appear only after an action (e.g. "Clear completed"); plans must not expect them up front
+                      const shown = el => (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null);
                       const label = el => clean(el.getAttribute('aria-label') ||
                         (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent) ||
                         el.closest('label')?.textContent || el.getAttribute('placeholder') || el.name || '');
@@ -83,10 +85,12 @@ async def discover(base_url: str, allowed_hosts: list[str], *, max_pages: int = 
                         title: clean(document.title),
                         headings: [...document.querySelectorAll('h1,h2,h3')].map(e => clean(e.textContent)).filter(Boolean).slice(0, 30),
                         links: [...document.querySelectorAll('a[href]')].map(e => ({text: clean(e.textContent || e.getAttribute('aria-label')), href: e.href})).slice(0, 100),
-                        buttons: [...document.querySelectorAll('button,input[type=button],input[type=submit]')]
+                        buttons: [...document.querySelectorAll('button,input[type=button],input[type=submit]')].filter(shown)
                           .map(e => clean(e.getAttribute('aria-label') || e.textContent || e.value)).filter(Boolean).slice(0, 60),
+                        hiddenButtons: [...document.querySelectorAll('button,input[type=button],input[type=submit]')].filter(e => !shown(e))
+                          .map(e => clean(e.getAttribute('aria-label') || e.textContent || e.value)).filter(Boolean).slice(0, 30),
                         fields: [...document.querySelectorAll('input,select,textarea')].filter(e => e.type !== 'hidden')
-                          .map(e => ({label: label(e), type: e.type || e.tagName.toLowerCase(), required: e.required})).slice(0, 60),
+                          .map(e => ({label: label(e), type: e.type || e.tagName.toLowerCase(), required: e.required, visible: shown(e)})).slice(0, 60),
                         passwordFields: document.querySelectorAll('input[type=password]').length,
                       };
                     }""")
@@ -104,7 +108,7 @@ async def discover(base_url: str, allowed_hosts: list[str], *, max_pages: int = 
                     # Accessibility output can expose current field values; redact form values entirely.
                     aria = re.sub(r'(?im)^(.*(?:textbox|password|searchbox|combobox).*):\s*.+$', r'\1', aria)
                     result.pages.append(PageMap(path=path_of(actual), title=data["title"], headings=data["headings"],
-                                                links=links[:60], buttons=data["buttons"], fields=data["fields"],
+                                                links=links[:60], buttons=data["buttons"], hidden_buttons=data["hiddenButtons"], fields=data["fields"],
                                                 has_login_form=bool(data["passwordFields"]), aria_snapshot=aria))
                 except Exception as exc:  # noqa: BLE001 — one inaccessible page must not abort the bounded scan
                     result.errors.append(f"{path_of(url)}: {type(exc).__name__}")
