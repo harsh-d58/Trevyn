@@ -206,6 +206,30 @@ Each module lists: **shows** · **source** · **API** · **frontend** · **live*
 
 Order inside P1 (start here): **M1 store live fields → top bar → analytics → network → regression → repair → projects.**
 
+### Progress (24 Oct)
+
+| Item | Status |
+|---|---|
+| M1 store live fields | ✅ |
+| M1 top bar | ✅ |
+| M6 Analytics | ✅ |
+| M5 Network | ✅ (pulled forward from P2) |
+| Regression, Repair, Projects | ⏳ next |
+
+- **M1 store live fields:** in live mode the island, stat pills, pipeline map and loop strip come from real runs.
+  - New `run_progress` workspace event, published from the UI lane.
+  - `/api/dashboard/overview` now returns `loop` and `runsToday`.
+  - Verified in a browser: the island goes 0/2 → 1/2 → 2/2 → completed, with no DEMO badge.
+- **M1 top bar:**
+  - The switcher lists real projects. It says "All projects" because `?project=` filtering comes in P2.
+  - Notifications come from `/api/events?latest=20`.
+- **M6 Analytics:** live page built on `/api/insights/analytics`, which gained `byType`, `passRate30`, `flaky`, `evidence` and `diagnoses`.
+- **M5 Network:**
+  - The runner records `ms` per request.
+  - `/api/insights/network` gained p50/p95, `statusCodes` and a `waterfall`.
+- **Shared kit:** `components/kit/page-loading.tsx` (`PageLoading`, `Empty`). With the API on, pages show a loading or error state, never demo numbers.
+- **Merge note:** the incoming dashboard redesign shows `LoopRings`, `PlatformPipeline` and `LoopStrip` only in its demo-mode "Demo tools" panel. Their live versions exist now; whether they return to the live overview is a design call.
+
 ---
 
 ## 5. Testing

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -148,7 +148,59 @@ async def analytics(s: AsyncSession = Depends(session)):
         row["inputTokens"] += c.input_tokens or 0
         row["outputTokens"] += c.output_tokens or 0
     return {"flow": flow, "heatmap": heatmap, "mttr": mttr, "modelCost": sorted(cost.values(), key=lambda r: -r["costUsd"]),
-            "totalCostUsd": round(sum(c.cost_usd or 0.0 for c in calls), 6), "policyDenials": denials}
+            "totalCostUsd": round(sum(c.cost_usd or 0.0 for c in calls), 6), "policyDenials": denials,
+            "byType": [{"type": t, "label": LABELS.get(t, t), "count": n} for t, n in
+                       sorted(Counter(f.category or "ui" for f in findings).items(), key=lambda x: -x[1])],
+            "passRate30": await _pass_rate(s, 30), "flaky": await _flaky(s), "evidence": await _evidence(s, findings),
+            "diagnoses": await _diagnoses(s)}
+
+
+async def _pass_rate(s: AsyncSession, days: int) -> list[dict]:
+    """Daily pass rate over verified cases; null on days without runs (the chart leaves a gap, not a zero)."""
+    now = datetime.now(UTC)
+    runs = (await s.scalars(select(Run).where(Run.started_at >= now - timedelta(days=days)))).all()
+    out = []
+    for i in range(days):
+        d = (now - timedelta(days=days - 1 - i)).date()
+        p, f, n = _tally([r for r in runs if _aware(r.started_at).date() == d], datetime.min.replace(tzinfo=UTC), now + timedelta(days=1))
+        out.append({"date": d.isoformat(), "rate": round(100 * p / (p + f + n), 1) if p + f + n else None})
+    return out
+
+
+async def _flaky(s: AsyncSession, window: int = 10) -> list[dict]:
+    """Cases that both passed and failed across their last `window` runs. Rate = the rarer outcome's share."""
+    evs = (await s.scalars(select(RunEvent).where(RunEvent.event_type == "verdict").order_by(RunEvent.ts))).all()
+    per: dict[str, list[str]] = defaultdict(list)
+    for e in evs:
+        m = _CASE_RE.match(e.summary or "")
+        if m and e.status in _STATUS_OUTCOME and not m.group(1).startswith("PASSIVE-"):
+            per[m.group(1)].append(_STATUS_OUTCOME[e.status])
+    rows = []
+    for case, outs in per.items():
+        last = outs[-window:]
+        passed, failed = last.count("passed"), sum(1 for o in last if o != "passed")
+        if passed and failed:
+            rows.append({"case": case, "rate": round(100 * min(passed, failed) / len(last), 1), "passed": passed, "failed": failed})
+    return sorted(rows, key=lambda r: -r["rate"])[:8]
+
+
+async def _evidence(s: AsyncSession, findings: list[Finding], top: int = 5) -> dict:
+    """Claim → evidence network: the newest proven or uncertain findings and the evidence kinds behind each."""
+    picked = sorted([f for f in findings if f.status in ("confirmed", "needs_review") and f.evidence_ids],
+                    key=lambda f: _aware(f.created_at), reverse=True)[:top]
+    ids = [i for f in picked for i in f.evidence_ids]
+    kind = {e.id: e.kind for e in (await s.scalars(select(Evidence).where(Evidence.id.in_(ids)))).all()} if ids else {}
+    all_kinds = Counter(e.kind for e in (await s.scalars(select(Evidence))).all())
+    return {"findings": [{"id": f.display_id, "title": f.title, "status": f.status, "severity": f.severity,
+                          "kinds": dict(Counter(kind[i] for i in f.evidence_ids if i in kind))} for f in picked],
+            "kinds": dict(all_kinds.most_common(6)),
+            "backed": sum(1 for f in findings if f.status == "confirmed"),
+            "uncertain": sum(1 for f in findings if f.status in ("needs_review", "inconclusive"))}
+
+
+async def _diagnoses(s: AsyncSession) -> dict:
+    evs = (await s.scalars(select(RunEvent).where(RunEvent.event_type == "diagnosis"))).all()
+    return {"total": len(evs), "ai": sum(1 for e in evs if e.actor == "ai")}
 
 
 def _read_network(uri: str) -> list[dict]:
@@ -166,14 +218,19 @@ def _read_network(uri: str) -> list[dict]:
 
 @router.get("/api/insights/network")
 async def network(s: AsyncSession = Depends(session)):
-    evs = (await s.scalars(select(Evidence).where(Evidence.kind == "network"))).all()
+    evs = (await s.scalars(select(Evidence).join(Run, Run.id == Evidence.run_id).where(Evidence.kind == "network")
+                           .order_by(Run.started_at))).all()
     stats: dict[tuple[str, str], dict] = {}
-    files = 0
+    times: dict[tuple[str, str], list[int]] = defaultdict(list)
+    codes: Counter = Counter()
+    files, waterfall = 0, None
     for ev in evs:
         reqs = _read_network(ev.uri)
         if not reqs:
             continue
         files += 1
+        waterfall = {"case": ev.test_case_id, "requests": [  # the newest file wins: one case's requests on a time axis
+            {k: r.get(k) for k in ("t", "ms", "method", "path", "status")} for r in sorted(reqs, key=lambda r: r.get("t") or 0)][:60]}
         last: dict[tuple[str, str], float] = {}
         for r in sorted(reqs, key=lambda r: r.get("t") or 0):
             method = str(r.get("method") or "GET").upper()
@@ -184,13 +241,19 @@ async def network(s: AsyncSession = Depends(session)):
             st = r.get("status")
             if isinstance(st, int) and st >= 400:
                 row["errors"] += 1
+            codes[f"{st // 100}xx" if isinstance(st, int) else "no response"] += 1
+            if isinstance(r.get("ms"), int):
+                times[key].append(r["ms"])
             t = r.get("t")
             if method == "POST" and isinstance(t, (int, float)):
                 if key in last and t - last[key] <= DUP_WINDOW_MS:
                     row["duplicatePosts"] += 1
                 last[key] = t
+    for key, row in stats.items():
+        ms = sorted(times.get(key, []))
+        row["p50"], row["p95"] = (ms[len(ms) // 2], ms[min(len(ms) - 1, int(len(ms) * 0.95))]) if ms else (None, None)
     endpoints = sorted(stats.values(), key=lambda r: (-r["requests"], r["method"], r["path"]))
-    return {"files": files, "endpoints": endpoints,
+    return {"files": files, "endpoints": endpoints, "statusCodes": dict(sorted(codes.items())), "waterfall": waterfall,
             "totals": {"requests": sum(r["requests"] for r in endpoints), "errors": sum(r["errors"] for r in endpoints),
                        "duplicatePosts": sum(r["duplicatePosts"] for r in endpoints)}}
 

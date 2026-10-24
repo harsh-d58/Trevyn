@@ -46,3 +46,37 @@ export async function getWorkspace(): Promise<Workspace> { return apiEnabled ? l
 export async function getLiveFinding(id: string) { return apiEnabled ? cachedGetLiveFinding(id) : null }
 export async function getLiveOverview() { return apiEnabled ? cachedGetLiveOverview() : null }
 export async function getLivePlans() { return apiEnabled ? cachedGetLivePlans() : null }
+
+export type LiveAnalytics = {
+  flow: { detected: number; confirmed: number; needs_review: number; inconclusive: number; repaired: number; verified: number }
+  heatmap: { weekday: number; hour: number; count: number }[]
+  mttr: { week: string; mttrHours: number; count: number }[]
+  totalCostUsd: number; policyDenials: number
+  byType: { type: string; label: string; count: number }[]
+  passRate30: { date: string; rate: number | null }[]
+  flaky: { case: string; rate: number; passed: number; failed: number }[]
+  evidence: { findings: { id: string; title: string; status: string; severity: string; kinds: Record<string, number> }[]; kinds: Record<string, number>; backed: number; uncertain: number }
+  diagnoses: { total: number; ai: number }
+}
+async function cachedGetLiveAnalytics() {
+  "use cache"
+  cacheLife("seconds")
+  return tryApi<LiveAnalytics>("/api/insights/analytics")
+}
+/** Analytics from GET /api/insights/analytics; null when the API is off or unreachable */
+export async function getLiveAnalytics() { return apiEnabled ? cachedGetLiveAnalytics() : null }
+
+export type LiveNetwork = {
+  files: number
+  endpoints: { method: string; path: string; requests: number; errors: number; duplicatePosts: number; p50: number | null; p95: number | null }[]
+  statusCodes: Record<string, number>
+  waterfall: { case: string; requests: { t: number; ms?: number; method: string; path: string; status?: number }[] } | null
+  totals: { requests: number; errors: number; duplicatePosts: number }
+}
+async function cachedGetLiveNetwork() {
+  "use cache"
+  cacheLife("seconds")
+  return tryApi<LiveNetwork>("/api/insights/network")
+}
+/** Network from GET /api/insights/network; null when the API is off or unreachable */
+export async function getLiveNetwork() { return apiEnabled ? cachedGetLiveNetwork() : null }

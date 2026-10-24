@@ -23,11 +23,14 @@ def redact(text: str) -> str:
     return SECRET_RE.sub("[REDACTED]", text)
 
 
-def on_response(net: list[dict], r) -> None:
-    """Records the status on the matching request, and where a redirect points so status checks can follow it."""
+def on_response(net: list[dict], r, t_ms: int | None = None) -> None:
+    """Records the status (and time to response, `ms`) on the matching request, and where a redirect points so
+    status checks can follow it."""
     for n in reversed(net):
         if n["url"] == redact(r.url) and "status" not in n:
             n["status"] = r.status
+            if t_ms is not None:
+                n["ms"] = max(0, t_ms - n["t"])
             if 300 <= r.status < 400 and (loc := r.headers.get("location")):
                 n["location"] = redact(urljoin(r.url, loc))
             return
@@ -118,7 +121,7 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
     t0 = time.monotonic()
     page.on("request", lambda r: net.append({"t": int((time.monotonic() - t0) * 1000), "method": r.method,
                                              "path": urlparse(r.url).path, "url": redact(r.url)}))
-    page.on("response", lambda r: on_response(net, r))
+    page.on("response", lambda r: on_response(net, r, int((time.monotonic() - t0) * 1000)))
     page.on("requestfailed", lambda r: setattr(res, "failed_requests", res.failed_requests + 1))
     page.on("console", lambda m: console.append({"type": m.type, "text": redact(m.text)}))
     page.on("pageerror", lambda e: console.append({"type": "error", "text": redact(str(e))}))
