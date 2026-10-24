@@ -45,6 +45,11 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(200))
     allowed_domains: Mapped[list] = mapped_column(default=list)
+    repository_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    repository_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    repository_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    repository_map: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    repository_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
@@ -75,6 +80,8 @@ class Plan(Base):
     test_cases: Mapped[list] = mapped_column(default=list)  # TestCase[] (schema-validated on write)
     risk_level: Mapped[str] = mapped_column(String(10), default="low")
     site_map_id: Mapped[str | None] = mapped_column(ForeignKey("site_maps.id"), nullable=True)
+    repository_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    repository_map: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -91,7 +98,7 @@ class Run(Base):
     __tablename__ = "runs"
     __table_args__ = (UniqueConstraint("project_id", "idempotency_key"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    display_id: Mapped[str] = mapped_column(String(20))
+    display_id: Mapped[str] = mapped_column(String(20), unique=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"))
     environment_id: Mapped[str] = mapped_column(ForeignKey("environments.id"))
@@ -136,7 +143,7 @@ class Evidence(Base):
 class Finding(Base):
     __tablename__ = "findings"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    display_id: Mapped[str] = mapped_column(String(20))
+    display_id: Mapped[str] = mapped_column(String(20), unique=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
     test_case_id: Mapped[str] = mapped_column(String(50))
@@ -158,7 +165,7 @@ class Finding(Base):
 class Approval(Base):
     __tablename__ = "approvals"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    display_id: Mapped[str] = mapped_column(String(20))
+    display_id: Mapped[str] = mapped_column(String(20), unique=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     subject_type: Mapped[str] = mapped_column(String(20))  # run_gate|plan|patch
     subject_id: Mapped[str] = mapped_column(String(36))
@@ -216,7 +223,7 @@ class AuditLog(Base):
 class Repair(Base):
     __tablename__ = "repairs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    display_id: Mapped[str] = mapped_column(String(20))
+    display_id: Mapped[str] = mapped_column(String(20), unique=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     finding_id: Mapped[str] = mapped_column(ForeignKey("findings.id"), index=True)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
@@ -257,6 +264,16 @@ class ProjectMember(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
     role: Mapped[str] = mapped_column(String(20), default="viewer")  # viewer|engineer|qa_lead|owner
     is_approver: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class WorkspaceEvent(Base):
+    """Workspace-wide change feed for live pages (PLAN_MODES §5). Append-only."""
+    __tablename__ = "workspace_events"
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    type: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict] = mapped_column(default=dict)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 APPEND_ONLY = ("run_events", "audit_log", "policy_decisions")

@@ -56,7 +56,7 @@ async def edit_plan(plan_id: str, body: PlanEdit, s: AsyncSession = Depends(sess
         raise Problem(422, "validation_error", "; ".join(errors[:8]))
     latest = max((p.version for p in (await s.scalars(select(Plan).where(Plan.project_id == old.project_id, Plan.requirement == old.requirement))).all()), default=old.version)
     new = Plan(project_id=old.project_id, environment_id=old.environment_id, requirement=old.requirement, test_mode=old.test_mode, source="edited",
-               site_map_id=old.site_map_id,
+               site_map_id=old.site_map_id, repository_sha=old.repository_sha, repository_map=old.repository_map,
                version=latest + 1, parent_plan_id=old.id, status="candidate", stack_hypotheses=old.stack_hypotheses,
                risk_level=max((c.risk for c in cases), key=["low", "medium", "high"].index),
                test_cases=[c.model_dump(exclude_none=True) for c in cases])

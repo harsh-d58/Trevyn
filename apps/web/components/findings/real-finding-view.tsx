@@ -15,7 +15,7 @@ export function RealFindingView({ f }: { f: ApiFindingDetail }) {
   return (
     <div className="grid gap-4">
       <PageHeader eyebrow={`${f.id} · ${f.test_case_id} · ${f.runId}`} title={f.title}><Severity s={f.severity} /><Pill tone={STATUS_TONE[f.status as keyof typeof STATUS_TONE] ?? "mut"}>{f.status}</Pill>
-          <Link href={`/runs/live?run=${f.runId}`}><Pill tone="brand">Open run</Pill></Link></PageHeader>
+          <Link href={`/runs/live?run=${f.runUuid}`}><Pill tone="brand">Open run</Pill></Link></PageHeader>
       <div className="grid gap-4 xl:grid-cols-[1fr_1.4fr]">
         <div className="grid content-start gap-4">
           <Card title="Expected vs actual">

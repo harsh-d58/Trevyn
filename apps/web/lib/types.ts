@@ -20,7 +20,7 @@ export type Kpi = {
 export type RunHealthPoint = { date: string; passed: number; failed: number; runs: number }
 export type CategorySlice = { type: FindingType; label: string; count: number; high: number }
 export type SuiteFailure = { suite: string; icon: "cart" | "key" | "grid" | "card"; failures: number; share: number; tone: "bad" | "perf" | "ai" | "ui" }
-export type GateStatus = { passRate: number; gate: number; passed: number; failed: number; release: string; weekDelta: number }
+export type GateStatus = { passRate: number; gate: number; passed: number; failed: number; release: string; weekDelta: number; /** what the numbers cover; demo omits it */ scope?: string }
 export type ThroughputPoint = { date: string; evidence: number }
 export type WeekSlot = { day: string; date: string; verified: number; inconclusive: number; today?: boolean }
 
@@ -45,6 +45,8 @@ export type Finding = {
 export type RunStatus = "running" | "passed" | "failed" | "warn" | "stopped"
 export type RunSummary = {
   id: string
+  /** stable row id from the API; display ids were not unique before migration 0006 */
+  uuid?: string
   name: string
   type: FindingType
   status: RunStatus
@@ -53,6 +55,8 @@ export type RunSummary = {
   duration: string
   trigger: string
   started: string
+  /** API run state (QUEUED, RUNNING, AWAITING_APPROVAL, …); absent in demo data */
+  state?: string
   people: string[]
 }
 /** one line of the scripted run log (prototype LiveRun LOG); `at` = tests executed before it appears */

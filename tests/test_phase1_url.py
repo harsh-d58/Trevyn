@@ -31,6 +31,12 @@ def test_discovery_url_filter_keeps_only_same_origin():
         assert crawl_url(base, href) is None
 
 
+def test_smoke_plan_stays_on_the_supplied_page_path():
+    draft = planner.smoke_plan("https://todomvc.com/examples/react/dist/")
+    assert all(case.steps[0].target == "/examples/react/dist/" for case in draft.test_cases)
+    assert draft.test_cases[0].assertions[0].subject == "/examples/react/dist/"
+
+
 def test_url_validator_blocks_unseen_paths_reset_and_database_assertions():
     plan = PlanDraft(test_cases=[case(steps=[{"action": "reset"}, {"action": "goto", "target": "/invented"}],
                                      assertions=[{"kind": "db_row_count", "subject": "orders", "op": "eq", "expected": 1}])])
@@ -76,3 +82,17 @@ async def test_url_plan_is_grounded_and_source_is_recorded(monkeypatch):
                                                     "black_box", site_map=scan(), has_hook=False)
     assert source == "model+sitemap"
     assert len(usages) == 1 and draft.test_cases[0].steps[1].target == "label=Email"
+
+
+async def test_gray_plan_receives_repository_map_as_observed_content(monkeypatch):
+    async def structured(**kwargs):
+        assert '<observed_content source="repository_map">' in kwargs["prompt"]
+        assert "Repository file map" not in "\n".join(kwargs["stable"])
+        return PlanDraft(test_cases=[case(steps=[{"action": "goto", "target": "/login"}])]), \
+            Usage(node="planner", model="fake")
+
+    monkeypatch.setattr(planner.adapter, "structured", structured)
+    _, _, source = await planner.generate("Users can sign in", "https://example.test/", ["example.test"],
+                                          "gray_box", site_map=scan(), has_hook=False,
+                                          repository_map={"repository": "example/site", "test_files": ["tests/test_login.py"]})
+    assert source == "model+sitemap+repo"

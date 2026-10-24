@@ -15,7 +15,7 @@ type Repair = {
   patch: { summary?: string; diff?: string; note?: string; files?: string[] }
   guard: { flags: { code: string; level: string; message: string }[] }
   approval: { id: string; status: string } | null
-  regression_run: string | null; regression_state: string | null
+  regression_run: string | null; regression_run_uuid: string | null; regression_state: string | null
   comparison: { test_case_id: string; baseline: string; rerun: string; change: string }[]
 }
 const OUTCOME_TONE: Record<string, Tone> = { pending: "human", approved: "brand", verified: "ok", failed: "bad", rejected: "mut", escalated: "bad" }
@@ -50,7 +50,7 @@ export function RepairPanel({ findingId, confirmed }: { findingId: string; confi
           <div className="flex flex-wrap items-center gap-2">
             <Pill tone={OUTCOME_TONE[r.outcome] ?? "mut"}>{r.outcome}</Pill>
             {r.approval && <Pill tone="human">{r.approval.id} · {r.approval.status}</Pill>}
-            {r.regression_run && <Link href={`/runs/live?run=${r.regression_run}`}><Pill tone="brand">{r.regression_run} · {r.regression_state}</Pill></Link>}
+            {r.regression_run && <Link href={`/runs/live?run=${r.regression_run_uuid ?? r.regression_run}`}><Pill tone="brand">{r.regression_run} · {r.regression_state}</Pill></Link>}
           </div>
           {r.patch.summary && <p><b>Patch:</b> {r.patch.summary}</p>}
           {r.guard.flags.map((g) => <p key={g.code} className="text-bad">{g.message}</p>)}

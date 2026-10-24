@@ -129,7 +129,8 @@ def sign(body: bytes, secret="ghsecret-xyz") -> str:
     return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-PR = json.dumps({"action": "opened", "pull_request": {"number": 7, "title": "fix", "head": {"sha": "abc"}}}).encode()
+PR = json.dumps({"action": "opened", "repository": {"full_name": "example/shop"},
+                 "pull_request": {"number": 7, "title": "fix", "head": {"sha": "abc"}}}).encode()
 
 
 async def test_github_webhook_unset_secret_503(client, monkeypatch):
@@ -148,13 +149,21 @@ async def test_github_webhook_missing_and_invalid_signature_401(client, monkeypa
 
 async def test_github_webhook_valid_pr_starts_ci_run(world, client, monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "ghsecret-xyz")
-    async with Session() as s:  # other tests share the DB: make this the "first" project
-        (await s.get(Project, world[0].id)).created_at = now() - timedelta(days=3650)
+    async with Session() as s:
+        (await s.get(Project, world[0].id)).repository_url = "https://github.com/example/shop"
         await s.commit()
     res = await client.post("/api/webhooks/github", content=PR,
                             headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": sign(PR)})
     assert res.status_code == 200, res.text
     assert res.json()["run"]["trigger"] == "ci"
+
+
+async def test_github_webhook_rejects_unconnected_repository(world, client, monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "ghsecret-xyz")
+    other = PR.replace(b"example/shop", b"example/unconnected")
+    res = await client.post("/api/webhooks/github", content=other,
+                            headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": sign(other)})
+    assert res.status_code == 404
 
 
 async def test_github_webhook_other_event_ignored(client, monkeypatch):

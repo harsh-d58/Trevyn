@@ -5,8 +5,12 @@
 import Link from "next/link"
 import { motion } from "motion/react"
 import { Check } from "lucide-react"
+import { useEffect, useState } from "react"
 import { FlowMap, type FlowEdgeData, type FlowNodeData } from "@/components/charts/flow-map"
+import { Card } from "@/components/kit/card"
+import { GraphMap, type Graph } from "@/components/runs/run-graph"
 import { Button } from "@/components/ui/button"
+import { api } from "@/lib/api"
 import { EVIDENCE_TRAIL, STAGES } from "@/lib/demo/runs"
 import { LOOP_STAGES, PLATFORM_NODES } from "@/lib/demo/insights"
 import { isLive, useLive, useLiveStore } from "@/lib/live"
@@ -27,7 +31,27 @@ function usePlatform() {
   return { run, pending, repair, live, stage, gate, exec, failed, diag, evN, queued }
 }
 
+/** Live mode: the real LangGraph map of the newest run, refetched as its state and progress change. */
+function LivePipeline() {
+  const run = useLive((s) => s.run)
+  const [graph, setGraph] = useState<Graph | null>(null)
+  const uuid = run?.uuid, tick = `${run?.apiState}:${run?.done}`
+  useEffect(() => {
+    if (!uuid) return
+    let mounted = true
+    api<Graph>(`/api/runs/${encodeURIComponent(uuid)}/graph`).then((g) => { if (mounted) setGraph(g) }).catch(() => {})
+    return () => { mounted = false }
+  }, [uuid, tick])
+  if (!run?.uuid) return <Card title="Trevyn pipeline"><p className="text-[13px] text-muted-foreground">No runs yet. Start one from New test run to see the pipeline move.</p></Card>
+  return <GraphMap graph={graph} title={`Trevyn pipeline · ${run.id} · ${run.name}`}
+    extra={<Link href={`/runs/live?run=${run.uuid}`} className="text-[12px] font-medium text-brand hover:underline">Open live run →</Link>} />
+}
+
 export function PlatformPipeline({ compact }: { compact?: boolean }) {
+  return useLive((s) => s.source) === "live" ? <LivePipeline /> : <DemoPipeline compact={compact} />
+}
+
+function DemoPipeline({ compact }: { compact?: boolean }) {
   const store = useLiveStore()
   const p = usePlatform()
   const { run, gate, exec, live } = p
@@ -92,15 +116,23 @@ export function PlatformPipeline({ compact }: { compact?: boolean }) {
 }
 
 /** PLAN · PROBE · PROVE · REPAIR strip with live status */
+const LOOP_STAGE: Record<string, number> = {
+  CREATED: 0, VALIDATING_INPUT: 0, PLANNING: 0, PLAN_REVIEW: 0, QUEUED: 0, RUNNING: 1, AWAITING_APPROVAL: 1, CANCELLING: 1,
+  COLLECTING_EVIDENCE: 2, VERIFYING: 2, FINDINGS_READY: 3, INCONCLUSIVE: 3, REPORTING: 3, REPAIR_PROPOSED: 3, PATCH_REVIEW: 3, REGRESSION: 3,
+}
+
 export function LoopStrip() {
   const p = usePlatform()
   const loop = useLive((s) => s.loop)
-  const active = p.live ? (p.stage <= 1 ? 0 : p.stage === 2 ? 1 : p.stage === 3 ? 2 : 3) : -1
+  const real = useLive((s) => s.source) === "live"
+  const patches = useLive((s) => s.approvals.filter((a) => a.category === "Accepting patches").length)
+  const active = !p.live ? -1 : real ? LOOP_STAGE[p.run?.apiState ?? ""] ?? -1 : p.stage <= 1 ? 0 : p.stage === 2 ? 1 : p.stage === 3 ? 2 : 3
   const status = [
     `${loop.plan[0]} / ${loop.plan[1]} tests validated`,
     p.run ? `${p.run.done} / ${p.run.total} executed` : "idle",
     `${loop.prove[0]} / ${loop.prove[1]} failures reproduced`,
-    p.repair === "done" ? "Patch verified · 46/46" : p.repair === "running" ? "Regression running…" : "1 patch awaiting approval",
+    real ? (patches ? `${patches} patch${patches === 1 ? "" : "es"} awaiting approval` : "No patches waiting")
+      : p.repair === "done" ? "Patch verified · 46/46" : p.repair === "running" ? "Regression running…" : "1 patch awaiting approval",
   ]
   return (
     <div className="glass-1 grid overflow-hidden rounded-[22px] sm:grid-cols-2 xl:grid-cols-4">

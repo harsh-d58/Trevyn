@@ -40,9 +40,10 @@ async def github_webhook(request: Request, s: AsyncSession = Depends(session)):
     payload = json.loads(body or b"{}")
     if event != "pull_request" or payload.get("action") not in ("opened", "synchronize"):
         return JSONResponse({"ignored": True, "event": event, "action": payload.get("action")}, status_code=202)
-    proj = await s.scalar(select(Project).order_by(Project.created_at).limit(1))  # single-project setup
+    full_name = (payload.get("repository") or {}).get("full_name", "")
+    proj = await s.scalar(select(Project).where(Project.repository_url == f"https://github.com/{full_name}")) if full_name else None
     if not proj:
-        raise Problem(404, "not_found", "No project configured")
+        raise Problem(404, "not_found", "No project is connected to this GitHub repository")
     plan = await s.scalar(select(Plan).where(Plan.project_id == proj.id, Plan.status == "approved")
                           .order_by(Plan.created_at.desc()).limit(1))
     if not plan:

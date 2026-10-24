@@ -180,6 +180,7 @@ The dashboard shows a **Live API data** / **Demo data** chip (bottom left). With
 - **Fix a planted bug:** restart the shop with that flag removed, e.g. `BUGS=email_validation,user_enum uv run uvicorn demo_shop.app:app --port 3100` fixes B1.
 - `uv run python -m trevyn_contracts` exports the JSON Schemas to `schemas/`.
 - **Postgres / Supabase:** run `uv run alembic upgrade head` once before starting the API (SQLite creates tables on startup).
+- **Public GitHub repositories:** the New run wizard can verify and link a public repo to a project. Trevyn records its canonical URL, selected ref, commit and file map for Gray-box planning. Browser tests still target the authorised URL; repository scripts are not run automatically. Apply migration `0004` before using this with Postgres.
 - **Tests:** `uv run pytest -q` (unit) · `uv run python tests/e2e_repair_loop.py` (needs shop + API running: finds DEF-142, patches, regresses, expects `verified`).
 - **Job queue (optional):** set `REDIS_URL=redis://localhost:6379/0` and start a worker with `uv run celery -A trevyn_api.worker worker -Q orchestrator,maintenance --pool=solo` (plus `uv run celery -A trevyn_api.worker beat` for the stale-run reaper). Without `REDIS_URL`, runs execute inside the API process and any run left unfinished by a restart is marked failed on startup.
 - **Auth:** `AUTH_MODE=off` (default) runs as a local owner. `AUTH_MODE=supabase` + `SUPABASE_JWKS_URL` (or `SUPABASE_JWT_SECRET`) enforces login and roles; the dashboard login page is not built yet.

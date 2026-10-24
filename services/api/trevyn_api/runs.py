@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from trevyn_contracts import CaseResult, Diagnosis, Target, TestCase, Verdict
 from trevyn_orch.models import Usage
@@ -22,7 +23,7 @@ from langgraph.types import Command
 from trevyn_orch import graph as rg
 from trevyn_orch.pipeline import TERMINAL, check
 
-from .db import (Approval, AuditLog, Environment, Evidence, Finding, ModelCall, Plan, Project, Run, RunEvent, Session, now)
+from .db import (Approval, AuditLog, Environment, Evidence, Finding, ModelCall, Plan, Project, Run, RunEvent, Session, SiteMapRecord, now)
 
 log = logging.getLogger("trevyn.runs")
 EVIDENCE_DIR = Path(os.getenv("EVIDENCE_DIR", "var/evidence"))
@@ -80,20 +81,33 @@ async def subscribe(run_id: str) -> AsyncIterator[dict]:
 
 
 async def next_display(model, project_id: str, prefix: str, start: int) -> str:
+    """Next human ID, numbered across the whole workspace: pages list every project together and resolve
+    /findings/DEF-142 by display ID, so per-project numbering collided. A unique index (migration 0006) backs this."""
     async with Session() as s:
-        n = await s.scalar(select(func.count()).select_from(model).where(model.project_id == project_id))
-    return f"{prefix}-{start + (n or 0):04d}" if prefix == "RUN" else f"{prefix}-{start + (n or 0)}"
+        ids = (await s.scalars(select(model.display_id).where(model.display_id.like(f"{prefix}-%")))).all()
+    n = max([start - 1, *(int(i.rsplit("-", 1)[1]) for i in ids if i.rsplit("-", 1)[1].isdigit())]) + 1
+    return f"{prefix}-{n:04d}" if prefix == "RUN" else f"{prefix}-{n}"
 
 
 async def append_event(run_id: str, actor: str, event_type: str, summary: str, status: str | None = None,
                        data: dict | None = None, evidence_refs: list[str] | None = None) -> dict:
-    async with _seq_locks[run_id], Session() as s:
-        seq = (await s.scalar(select(func.max(RunEvent.seq)).where(RunEvent.run_id == run_id)) or 0) + 1
-        ev = RunEvent(run_id=run_id, seq=seq, actor=actor, event_type=event_type, summary=summary, status=status,
-                      data=data or {}, evidence_refs=evidence_refs or [])
-        s.add(ev)
-        await s.commit()
-    payload = event_json(ev)
+    async with _seq_locks[run_id]:
+        for attempt in range(8):
+            try:
+                async with Session() as s:
+                    # Postgres serializes writers of one run, while different runs proceed independently.
+                    await s.execute(select(Run.id).where(Run.id == run_id).with_for_update())
+                    seq = (await s.scalar(select(func.max(RunEvent.seq)).where(RunEvent.run_id == run_id)) or 0) + 1
+                    ev = RunEvent(run_id=run_id, seq=seq, actor=actor, event_type=event_type, summary=summary, status=status,
+                                  data=data or {}, evidence_refs=evidence_refs or [])
+                    s.add(ev)
+                    await s.commit()
+                payload = event_json(ev)
+                break
+            except IntegrityError:
+                if attempt == 7:
+                    raise
+                await asyncio.sleep(0.01 * (attempt + 1))  # SQLite does not support row-level FOR UPDATE
     await publish(run_id, payload)
     return payload
 
@@ -119,7 +133,7 @@ class Ctx:
     def __init__(self, run: Run):
         self.run_id, self.project_id, self.display_id = run.id, run.project_id, run.display_id
         self.evidence_dir = str(EVIDENCE_DIR)
-        self.counts = {"passed": 0, "failed": 0, "inconclusive": 0}
+        self.counts = {key: (run.counts or {}).get(key, 0) for key in ("passed", "failed", "inconclusive")}
         self._cancel = False
 
     async def _refresh_cancel(self) -> None:
@@ -138,13 +152,23 @@ class Ctx:
             await s.commit()
         await append_event(self.run_id, "det", "state", f"{frm} → {to}" + (f" · {reason}" if reason else ""), to.lower(),
                            {"from": frm, "to": to})
+        from . import events
+        await events.publish(self.project_id, "run_state", {"run": self.display_id, "uuid": self.run_id, "state": to})
 
     async def log(self, actor, kind, summary, status=None, data=None, evidence_ids=None) -> None:
         if kind == "verdict":
             key = {"ok": "passed", "failed": "failed", "warn": "failed", "inconclusive": "inconclusive"}.get(status or "")
             if key:
                 self.counts[key] += 1
+                async with Session() as s:
+                    run = await s.get(Run, self.run_id)
+                    run.counts = {**(run.counts or {}), **self.counts}
+                    await s.commit()
         await append_event(self.run_id, actor, kind, summary, status, data, evidence_ids)
+        if kind == "lane" and (data or {}).get("lane") == "ui":  # the island's progress ring
+            from . import events
+            await events.publish(self.project_id, "run_progress", {"run": self.display_id, "uuid": self.run_id,
+                                                                   "done": data.get("done", 0), "total": data.get("total", 0)})
         await self._refresh_cancel()
 
     async def open_gate(self, title: str, reason: str, risk: str) -> tuple[str, str, bool]:
@@ -159,7 +183,9 @@ class Ctx:
                           subject_type="run_gate", subject_id=self.run_id, title=title, reason=reason, risk=risk)
             s.add(ap)
             await s.commit()
-            return ap.id, ap.display_id, True
+        from . import events
+        await events.publish(self.project_id, "approval_created", {"id": ap.display_id, "run": self.display_id, "title": title})
+        return ap.id, ap.display_id, True
 
     async def add_evidence(self, kind: str, path: str, case_id: str) -> str:
         from . import storage  # S3/MinIO when S3_* is set, else local disk
@@ -171,20 +197,24 @@ class Ctx:
         return ev.id
 
     async def add_finding(self, tc: TestCase, case: CaseResult, verdict: Verdict, diag: Diagnosis | None,
-                          evidence_ids: list[str], repair_prompt: str | None) -> str:
+                          evidence_ids: list[str], repair_prompt: str | None, category: str = "ui",
+                          severity: str | None = None) -> str:
         if verdict.status == "confirmed" and not evidence_ids:  # every confirmed finding cites evidence
             verdict.status, verdict.reason = "needs_review", "no_evidence"
-        severity = "low" if verdict.status == "inconclusive" else (
-            "high" if tc.risk == "high" or set(tc.side_effects) & {"creates_order", "charges_card"} else "medium")
+        severity = severity or ("low" if verdict.status == "inconclusive" else (
+            "high" if tc.risk == "high" or set(tc.side_effects) & {"creates_order", "charges_card"} else "medium"))
         async with Session() as s:
             f = Finding(display_id=await next_display(Finding, self.project_id, "DEF", 142), project_id=self.project_id,
-                        run_id=self.run_id, test_case_id=tc.test_case_id, title=tc.title, severity=severity, status=verdict.status,
+                        run_id=self.run_id, test_case_id=tc.test_case_id, title=tc.title, category=category, severity=severity, status=verdict.status,
                         board_column="triage" if verdict.status != "confirmed" else "investigating",
                         expected=tc.expected_result, actual=verdict.explanation or "", verdict=verdict.model_dump(),
                         repro_steps=[st.model_dump(exclude_none=True) for st in tc.steps if st.action != "reset"],
                         diagnosis=diag.model_dump() if diag else None, repair_prompt=repair_prompt, evidence_ids=evidence_ids)
             s.add(f)
             await s.commit()
+        from . import events
+        await events.publish(self.project_id, "finding_created", {"id": f.display_id, "run": self.display_id, "status": verdict.status,
+                                                                  "severity": severity, "category": category})
         if verdict.status == "confirmed" and severity == "high":
             from .integrations import notify
             await notify(f"Trevyn confirmed {f.display_id} ({severity}): {tc.title}")
@@ -202,9 +232,13 @@ async def _load(run_id: str) -> tuple[Run, rg.Deps]:
     async with Session() as s:
         run = await s.get(Run, run_id)
         plan, env, proj = await s.get(Plan, run.plan_id), await s.get(Environment, run.environment_id), await s.get(Project, run.project_id)
-    target = Target(base_url=env.base_url, allowed_hosts=proj.allowed_domains, hook_url=env.hook_url if env.local_runner else None,
-                    hook_token=os.getenv("TREVYN_HOOK_TOKEN") or None)
-    return run, rg.Deps(ctx=Ctx(run), cases=[TestCase.model_validate(tc) for tc in plan.test_cases], target=target)
+        target = Target(base_url=env.base_url, allowed_hosts=proj.allowed_domains, hook_url=env.hook_url if env.local_runner else None,
+                        hook_token=os.getenv("TREVYN_HOOK_TOKEN") or None)
+        site = await s.get(SiteMapRecord, plan.site_map_id) if getattr(plan, "site_map_id", None) else None
+    paths = [p.get("path", "/") for p in ((site.content or {}).get("pages", []) if site else [])]
+    repo_files = len((getattr(plan, "repository_map", None) or {}).get("files", []) or [])
+    return run, rg.Deps(ctx=Ctx(run), cases=[TestCase.model_validate(tc) for tc in plan.test_cases], target=target,
+                        mode=plan.test_mode or "black_box", site_paths=paths, repo_files=repo_files)
 
 
 async def _invoke(run_id: str, deps: rg.Deps, payload) -> None:
@@ -219,7 +253,7 @@ async def _invoke(run_id: str, deps: rg.Deps, payload) -> None:
         try:
             await deps.ctx.state("FAILED", f"{type(e).__name__}: {e}"[:300])
         except Exception:
-            pass
+            log.exception("run %s could not be marked FAILED", run_id)
 
 
 async def execute_run(run_id: str) -> None:

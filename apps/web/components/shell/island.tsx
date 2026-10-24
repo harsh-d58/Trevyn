@@ -44,18 +44,18 @@ function Compact({ flash, run, muted, now }: { flash: Flash | null; run: LiveSta
       <>
         <span className="live-dot size-2 shrink-0 rounded-full bg-[#ffb547]" />
         <span className="truncate font-medium">{run.id} waiting for approval</span>
-        <span className="ml-auto"><Demo /></span>
+        {!run.uuid && <span className="ml-auto"><Demo /></span>}
       </>
     )
   }
   if (run && isLive(run)) {
     return (
       <>
-        <Ring p={run.done / run.total} />
+        <Ring p={run.total ? run.done / run.total : 0} />
         <span className="font-mono text-[11.5px] text-white/70">{run.id}</span>
         <span className="font-semibold tabular">{run.done}/{run.total}</span>
         <span className="ml-auto font-mono text-[11.5px] text-white/60 tabular">{now && run.startedAt ? clock(now - run.startedAt) : "–:––"}</span>
-        <Demo />
+        {!run.uuid && <Demo />}
         {muted && <Moon size={13} className="text-white/60" />}
       </>
     )
@@ -64,7 +64,7 @@ function Compact({ flash, run, muted, now }: { flash: Flash | null; run: LiveSta
     <>
       <span className="size-2 shrink-0 rounded-full bg-[#45dcc6]" />
       <span className="text-white/85">All quiet</span>
-      <span className="ml-auto truncate text-[11.5px] text-white/55">{muted ? <Moon size={13} /> : run ? `${run.id} ${run.state}` : "no live runs"}</span>
+      <span className="ml-auto truncate text-[11.5px] text-white/55">{muted ? <Moon size={13} /> : run ? `${run.id} ${run.uuid ? (run.apiState ?? run.state).toLowerCase() : run.state}` : "no live runs"}</span>
     </>
   )
 }
@@ -108,17 +108,17 @@ export function Island() {
             {open ? (
               <div className="flex h-full flex-col p-4 text-[12.5px]">
                 <div className="flex items-center gap-2">
-                  {run ? <Ring p={run.done / run.total} /> : <span className="size-2 rounded-full bg-[#45dcc6]" />}
+                  {run ? <Ring p={run.total ? run.done / run.total : 0} /> : <span className="size-2 rounded-full bg-[#45dcc6]" />}
                   <span className="truncate font-semibold">{run ? `${run.id} · ${run.name}` : "No live runs"}</span>
                   <span className="ml-auto flex items-center gap-1.5">
                     {live && run && <span className="font-mono text-white/60 tabular">{now && run.startedAt ? clock(now - run.startedAt) : ""}</span>}
                     {run && !live && <span className="text-[11px] text-white/60 capitalize">{run.state}</span>}
-                    {run && <Demo />}
+                    {run && !run.uuid && <Demo />}
                   </span>
                 </div>
                 {run && (
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-                    <motion.div className="h-full rounded-full bg-[#45dcc6]" animate={{ width: `${(run.done / run.total) * 100}%` }} />
+                    <motion.div className="h-full rounded-full bg-[#45dcc6]" animate={{ width: `${run.total ? (run.done / run.total) * 100 : 0}%` }} />
                   </div>
                 )}
                 <ul className="mt-3 grid gap-1.5 overflow-hidden">
@@ -130,8 +130,8 @@ export function Island() {
                   ))}
                 </ul>
                 <div className="mt-auto flex gap-2 pt-3">
-                  <Link href="/runs/live" onClick={() => setOpen(false)} className="press pulse pulse-on-dark rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-ink">Open run</Link>
-                  {run?.state === "gate" && (
+                  <Link href={run?.uuid ? `/runs/live?run=${run.uuid}` : "/runs/live"} onClick={() => setOpen(false)} className="press pulse pulse-on-dark rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-ink">Open run</Link>
+                  {run?.state === "gate" && !run.uuid && (
                     <button onClick={() => store.approveGate()} className="press pulse pulse-on-dark rounded-full bg-[#f7ae47] px-3 py-1.5 text-[12px] font-semibold text-ink">Approve tests</button>
                   )}
                   <button onClick={() => store.toggleMute()} className="press pulse pulse-on-dark inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-[12px] font-medium hover:bg-white/15">

@@ -1,6 +1,7 @@
 """Step 9 insights endpoints, computed from seeded DB rows and a network evidence file."""
 import json
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -35,8 +36,8 @@ async def seeded(tmp_path: Path):
         pl = Plan(project_id=p.id, environment_id=e.id, requirement="r", source="template", test_cases=[])
         s.add(pl)
         await s.flush()
-        r1 = Run(display_id="RUN-I1", project_id=p.id, plan_id=pl.id, environment_id=e.id, name="first", started_at=T0)
-        r2 = Run(display_id="RUN-I2", project_id=p.id, plan_id=pl.id, environment_id=e.id, name="regr", trigger="regression",
+        r1 = Run(display_id=f"RUN-I1-{uuid.uuid4().hex[:6]}", project_id=p.id, plan_id=pl.id, environment_id=e.id, name="first", started_at=T0)
+        r2 = Run(display_id=f"RUN-I2-{uuid.uuid4().hex[:6]}", project_id=p.id, plan_id=pl.id, environment_id=e.id, name="regr", trigger="regression",
                  started_at=T0 + timedelta(hours=5))
         s.add_all([r1, r2])
         await s.flush()
@@ -49,14 +50,14 @@ async def seeded(tmp_path: Path):
             Evidence(run_id=r1.id, test_case_id="T-1", kind="network", uri="s3://bucket/x.json", sha256="0" * 64, bytes=1),
             Evidence(run_id=r1.id, test_case_id="T-1", kind="network", uri=str(tmp_path / "missing.json"), sha256="0" * 64, bytes=1),
         ])
-        f1 = Finding(display_id="DEF-I1", project_id=p.id, run_id=r1.id, test_case_id="T-1", title="dup order", severity="high",
+        f1 = Finding(display_id=f"DEF-I1-{uuid.uuid4().hex[:6]}", project_id=p.id, run_id=r1.id, test_case_id="T-1", title="dup order", severity="high",
                      status="confirmed", expected="1", actual="2", created_at=T0)
-        f2 = Finding(display_id="DEF-I2", project_id=p.id, run_id=r1.id, test_case_id="T-3", title="flaky", severity="low",
+        f2 = Finding(display_id=f"DEF-I2-{uuid.uuid4().hex[:6]}", project_id=p.id, run_id=r1.id, test_case_id="T-3", title="flaky", severity="low",
                      status="inconclusive", expected="a", actual="b", created_at=T0)
         s.add_all([f1, f2])
         await s.flush()
         s.add_all([
-            Repair(display_id="REP-I1", project_id=p.id, finding_id=f1.id, kind="diff", prompt="p", outcome="verified",
+            Repair(display_id=f"REP-I1-{uuid.uuid4().hex[:6]}", project_id=p.id, finding_id=f1.id, kind="diff", prompt="p", outcome="verified",
                    created_at=T0 + timedelta(hours=6)),
             ModelCall(node="planner", provider="anthropic", model="claude-opus-5-5", input_tokens=100, output_tokens=50,
                       latency_ms=10, cost_usd=0.25),

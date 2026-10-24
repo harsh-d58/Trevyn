@@ -81,7 +81,7 @@ export function HeroReadiness({ gate }: { gate: GateStatus }) {
         <span className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-white/15 px-2.5 py-1 text-[11.5px] font-semibold backdrop-blur-md">
           <Sparkles size={12} />Release {gate.release}
         </span>
-        <span className="text-[11.5px] text-white/80">Staging · ShopFlow</span>
+        <span className="text-[11.5px] text-white/80">{gate.scope ?? "Staging · ShopFlow"}</span>
       </div>
 
       <div className="mt-4 grid flex-1 items-center gap-4 sm:grid-cols-[1fr_auto]">

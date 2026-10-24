@@ -14,7 +14,8 @@ import { notify } from "@/lib/notify"
 
 type Case = { test_case_id: string; title: string; requirement_ref?: string | null; preconditions?: string[]; steps?: unknown[]; expected_result: string; risk?: "low" | "medium" | "high" }
 type SiteMap = { pages: { path: string; title: string; buttons: string[]; fields: { label: string; type: string }[] }[]; crawled_at: string; errors: string[] }
-type PlanDetail = { id: string; project_id: string; version: number; status: string; source: string; requirement: string; risk_level: string; test_cases: Case[]; site_map: SiteMap | null }
+type RepositoryMap = { repository: string; commit: string; file_count: number; test_files: string[]; suggested_test_commands: string[] }
+type PlanDetail = { id: string; project_id: string; version: number; status: string; source: string; requirement: string; risk_level: string; test_cases: Case[]; site_map: SiteMap | null; repository_sha: string | null; repository_map: RepositoryMap | null }
 const STATUS_TONE: Record<string, Tone> = { approved: "ok", rejected: "bad", draft: "warn", pending: "human" }
 
 export function LivePlansView({ plans: initial }: { plans: ApiPlanSummary[] }) {
@@ -81,6 +82,12 @@ export function LivePlansView({ plans: initial }: { plans: ApiPlanSummary[] }) {
               <Button variant="brand" size="pill-sm" disabled={busy || shown.status === "approved"} onClick={() => decide("approve")}><Check />Approve</Button>
             </div>)}>
           {shown && (<>
+            {shown.repository_map && <section className="border-b border-border p-4" aria-label="Connected GitHub repository">
+              <h3 className="text-[13px] font-semibold">Connected GitHub repository</h3>
+              <p className="mt-1 font-mono text-[11px]">{shown.repository_map.repository} · {shown.repository_sha?.slice(0, 8)}</p>
+              <p className="mt-1 text-[12px] text-muted-foreground">{shown.repository_map.file_count} public files indexed · {shown.repository_map.test_files.length} test paths shown. Repository test commands are suggestions; this run executes browser cases against the URL.</p>
+              {shown.repository_map.test_files.length > 0 && <p className="mt-2 font-mono text-[11px] text-muted-foreground">Tests: {shown.repository_map.test_files.slice(0, 6).join(", ")}</p>}
+            </section>}
             {shown.site_map && <section className="border-b border-border p-4" aria-label="What Trevyn saw">
               <div className="flex items-center justify-between gap-3"><h3 className="text-[13px] font-semibold">What Trevyn saw · {shown.site_map.pages.length} pages</h3>
                 <Button variant="glass" size="pill-sm" disabled={busy} onClick={rescan}>Re-scan site</Button></div>

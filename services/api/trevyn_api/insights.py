@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .common import Problem
-from .db import Approval, Evidence, Finding, ModelCall, PolicyDecision, Repair, Run, RunEvent, session
+from .db import Approval, Evidence, Finding, ModelCall, Plan, PolicyDecision, Repair, Run, RunEvent, session
 
 router = APIRouter()
 LABELS = {"ui": "UI", "api": "API", "perf": "Performance", "security": "Security", "compat": "Compatibility"}
@@ -77,9 +77,22 @@ async def overview(s: AsyncSession = Depends(session)):
         sel = [f for f in findings if f.category == t]
         if sel:
             cats.append({"type": t, "label": label, "count": len(sel), "high": sum(1 for f in sel if f.severity == "high")})
-    return {"kpis": kpis, "runHealth": health, "categories": cats,
+    return {"kpis": kpis, "runHealth": health, "categories": cats, "loop": await _loop(s, now),
+            "runsToday": sum(1 for r in runs if _aware(r.started_at).date() == now.date()),
             "gate": {"passRate": round(rate1, 1), "gate": float(os.getenv("RELEASE_GATE", "90")), "passed": p1, "failed": f1 + i1,
-                     "release": "Last 7 days", "weekDelta": round(rate1 - rate0, 1) if ex0 else 0.0}}
+                     "release": "Last 7 days", "scope": "All projects", "weekDelta": round(rate1 - rate0, 1) if ex0 else 0.0}}
+
+
+async def _loop(s: AsyncSession, now: datetime) -> dict:
+    """Today's rings (UTC day): plan = cases in plans approved / created; prove = failures confirmed / found;
+    decide = approvals decided / opened."""
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    plans = (await s.scalars(select(Plan).where(Plan.created_at >= day))).all()
+    found = (await s.scalars(select(Finding).where(Finding.created_at >= day))).all()
+    opened = (await s.scalars(select(Approval).where(Approval.created_at >= day))).all()
+    return {"plan": [sum(len(p.test_cases or []) for p in plans if p.status == "approved"), sum(len(p.test_cases or []) for p in plans)],
+            "prove": [sum(1 for f in found if f.status == "confirmed"), len(found)],
+            "decide": [sum(1 for a in opened if a.status != "pending"), len(opened)]}
 
 
 # ---- Step 9: analytics, network, engine placeholders, regression history ----

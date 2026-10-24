@@ -65,7 +65,8 @@ def repair_json(r: Repair, f: Finding, ap: Approval | None, rows: list[Regressio
     return {"id": r.display_id, "uuid": r.id, "finding": f.display_id, "attempt": r.attempt, "kind": r.kind, "outcome": r.outcome,
             "note": r.note, "prompt": r.prompt, "patch": r.patch, "guard": r.guard, "requested_by": r.requested_by,
             "approval": {"id": ap.display_id, "uuid": ap.id, "status": ap.status} if ap else None,
-            "regression_run": run.display_id if run else None, "regression_state": run.state if run else None,
+            "regression_run": run.display_id if run else None, "regression_run_uuid": run.id if run else None,
+            "regression_state": run.state if run else None,
             "comparison": [{"test_case_id": x.test_case_id, "baseline": x.baseline_outcome, "rerun": x.rerun_outcome, "change": x.change} for x in rows],
             "counts": counts, "created_at": r.created_at.isoformat()}
 
@@ -100,7 +101,7 @@ async def propose(fid: str, request: Request, s: AsyncSession = Depends(session)
     if guard["refused"]:
         raise Problem(422, "policy_denied", "; ".join(x["message"] for x in guard["flags"] if x["level"] == "refuse"))
     user = getattr(request.state, "user", {"sub": "dev"})
-    rp = Repair(id=uid(), display_id=f"RP-{await s.scalar(select(func.count()).select_from(Repair).where(Repair.project_id == f.project_id)) + 1}",
+    rp = Repair(id=uid(), display_id=await runs.next_display(Repair, f.project_id, "RP", 1),
                 project_id=f.project_id, finding_id=f.id, attempt=len(prior) + 1, kind="demo_flag", requested_by=user["sub"],
                 prompt=f.repair_prompt or summary, guard=guard,
                 patch={"flag": flag, "summary": summary, "diff": diff, "files": guard["files"],

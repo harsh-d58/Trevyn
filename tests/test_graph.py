@@ -37,7 +37,7 @@ class FakeCtx:
     async def add_evidence(self, kind, path, case_id):
         return "ev"
 
-    async def add_finding(self, *a):
+    async def add_finding(self, *a, **kw):
         return "DEF-1"
 
     async def record_model(self, usage, run_id):
@@ -52,10 +52,14 @@ def ran(monkeypatch):
     """Stubs the runner: records which cases ran and reports no results (the run then completes cleanly)."""
     seen: list[str] = []
 
-    async def fake_run_cases(ctx, approved, target):
+    async def fake_run_cases(ctx, approved, target, **kw):
         seen.extend(c.test_case_id for c in approved)
         return []
+
+    async def no_passive(ctx, target, paths):
+        return []
     monkeypatch.setattr(pl, "run_cases", fake_run_cases)
+    monkeypatch.setattr(pl, "passive_lane", no_passive)  # no network in unit tests
     return seen
 
 
@@ -114,7 +118,8 @@ async def test_resume_after_restart_continues_from_the_checkpoint(tmp_path, ran)
         out = await resume(saver, "r4", second, True)
     assert not rg.interrupted(out) and ran == ["TC-1", "TC-2", "TC-3"] and second.cur == "COMPLETED"
     # picks up at the gate decision: no re-start, no second approval
-    assert second.events[:2] == [("state", "RUNNING"), ("gate", "TC-2 approved")] and len(second.approvals) == 1
+    flow = [e for e in second.events if e[0] not in ("node", "lane")]  # node/lane events are progress, not flow
+    assert flow[:2] == [("state", "RUNNING"), ("gate", "TC-2 approved")] and len(second.approvals) == 1
 
 
 def test_pg_dsn():

@@ -1,8 +1,42 @@
 # Progress 1 — handover for a new agent session
 
+## Update — Phase 2 deep pipeline built (24 Oct 2026)
+
+Covers [PLAN_MODES.md](PLAN_MODES.md) §3–6, plus Phase 1 items A6 (safe retest) and A7 (passive checks).
+
+- **Graph** (`workers/orchestrator/trevyn_orch/graph.py`): parent graph `intake → recon (subgraph: site_map, repo_map only in gray box) → gate → [lane_ui ∥ lane_passive] (Send fan-out, join) → verify (subgraph: collect, classify, traffic, record) → report`. `TOPOLOGY` describes this graph for the UI. Every node logs a `node` event (start/end/waiting/failed); lanes log `lane` progress; after each case the UI lane logs a `screenshot` event.
+- **Passive checks** (`trevyn_orch/passive.py`, A7): P1 CSP, P2 framing, P3 HSTS, P4 nosniff, P5 session cookie flags and P6 version leak come from up to 5 same-site GETs (redirects off the allowlist stop the fetch). P7 mixed content, P8 console errors and P9 5xx come from the UI lane's captured traffic. Each issue becomes a confirmed finding with category `security`/`network`/`ui`, the rule's severity, and a JSON evidence file.
+- **Safe retest** (A6, `pipeline._repeat_policy`): with a reset hook, failures repeat after a reset. On live sites only read-only, non-high-risk cases repeat; anything that changes data is reported `not_repeated: changes data`.
+- **Workspace events** (`services/api/trevyn_api/events.py`, table `workspace_events`, **migration `0005`**):
+  - Published events: `run_created`, `run_state`, `finding_created`, `finding_updated`, `approval_created`, `approval_decided`, `plan_ready` and `plan_updated`.
+  - `GET /api/events?after_id=&project=` returns the feed; `GET /api/events/stream` streams it over SSE (ticket auth, Redis channel `workspace` or in-process).
+  - `GET /api/runs/{id}/graph` returns the topology with node and lane status.
+- **Frontend:**
+  - `lib/live.tsx` `useWorkspaceEvents` keeps one stream per tab. On events it debounces a refetch of findings, runs and approvals into the store, calls `router.refresh()`, and flashes the island.
+  - `components/runs/run-graph.tsx` adds the graph map, lanes panel and screenshot strip (fetched with the bearer token) to the live run page; `node` events are hidden from the run log.
+- **Verified:**
+  - 84 Python tests pass (new: `tests/test_deep_pipeline.py`).
+  - Both e2e scripts pass on an isolated API, SQLite and no Redis. Golden path: DEF-142 confirmed plus 3 passive findings. Repair loop: 5/5 PASS.
+  - TypeScript, ESLint and `next build` pass.
+  - Browser check on `/runs/live` during a new run: workspace stream opened; graph nodes all `done`; both lanes 2/2 and 1/1; 2 screenshots shown.
+- **Display IDs are workspace-wide.** Before this fix, RUN-, DEF-, AP- and RP- numbers were counted per project, so a second project reused RUN-2481 and DEF-142. That caused duplicate React keys and ambiguous `/findings/DEF-142` links.
+  - `runs.next_display` now takes the highest number across the whole workspace.
+  - **Migration `0006`** renumbers existing duplicates (the oldest row keeps its ID) and adds unique indexes. It was tested on a seeded SQLite DB, including downgrade.
+- **Not verified:** Supabase + Redis + Celery worker with the new graph; a live public site with passive checks. Apply `alembic upgrade head` (0005 + 0006) before starting this API against Postgres.
+
 ## Update — live URL build started (24 Oct 2026)
 
-- **A1, code ready:** `/readyz` reports the provider and planner model; `scripts/check_models.py` checks configured gateway model IDs and structured JSON for all four nodes. Live verification is pending because `LLM_API_KEY` is empty on this machine.
+### Public GitHub connection added
+
+- A project can link a **public GitHub repository** through `PUT /api/projects/{id}/repository`. Trevyn verifies the repository and ref through GitHub's API, follows GitHub's canonical rename, stores the commit SHA and a bounded file map, and shows the connection on the live Projects and Plans pages.
+- The new-run wizard sends the repository URL and optional ref before planning. Gray-box plans receive the repository file map as untrusted observed context; browser cases still run against the authorised site URL. Repository test scripts are suggested, not executed by the API.
+- Signed GitHub pull-request webhooks now select the project by its connected repository instead of selecting the first project.
+- Migration `0004_repository` is required before starting the updated API against Postgres. It passed a fresh SQLite migration test; it has not been applied to Supabase.
+- Verified with public `https://github.com/harsh-d58/Trevyn` (the old remote redirects there): commit `04a1210522b773dc09007939ad3029480c369e05`, 236 files indexed. A detached clone of that commit passed 65 Python tests using its own code and test database.
+- **Famous live pair:** `https://todomvc.com/examples/react/dist/` + `https://github.com/tastejs/todomvc` at `ff43b02e59dfa604386bb382034b2cd07c2bcd8a` (4,495 files). The repository map prioritises `examples/react/src/` and excludes checked-in dependency folders. `tests/manual_todomvc_pair.py` passed a real add-todo browser journey (3 steps, 2 assertions). `tests/manual_todomvc_api.py` exercised project creation, repo connection, site discovery, Gray-box plan persistence, approval and execution on an isolated SQLite DB: 2 passed, 0 failed, 0 inconclusive. The no-AI fallback still uses smoke cases; repository test scripts are not run automatically.
+- **Checks:** the local workspace passes 77 Python tests; TypeScript and ESLint pass.
+
+- **A1, code ready:** `/readyz` reports the provider and planner model; `scripts/check_models.py` checks configured gateway model IDs and structured JSON for all four nodes. Live verification is pending because OpenRouter rejects the current `LLM_API_KEY` with HTTP 401; use no-AI mode meanwhile.
 - **A2, first working slice:** URL projects are scanned in a read-only Chromium or installed Chrome browser before planning. The scan is limited to 10 same-site pages, depth 2 and 60 seconds, cached for one hour, and linked immutably to the plan. The plan page shows "What Trevyn saw" and offers re-scan. Login is detected, but credential-based discovery remains A4.
 - **A3, first working slice:** URL-mode plans receive the observed site map; deterministic validation rejects unobserved routes and controls, reset steps, database assertions and off-site navigation. Write-like controls become high risk and wait for the existing human gate. A missing AI key or empty scan still produces only the honest smoke plan.
 - **Schema:** migration `0003_site_maps` must be applied to Postgres with `alembic upgrade head` before starting this version of the API. It passed a fresh SQLite migration test; it has not been applied to Supabase.
@@ -11,13 +45,13 @@
 Remaining Phase 1 work: A4 test credentials, A5 selector fallback, A6 safe retest, A7 passive checks and A8 project picker/history, plus live provider and practice-site verification.
 
 > **Written:** 24 Oct 2026. **Purpose:** everything a new person or agent needs to take over Trevyn without re-reading the chat history.
-> **Read next:** [README.md](README.md) (run commands, status table) · [PHASE1.md](PHASE1.md) (the next build phase: live-URL testing) · [BACKEND_AND_REMAINING_WORK.md](BACKEND_AND_REMAINING_WORK.md) (original full blueprint).
+> **Read next:** [README.md](README.md) (run commands, status table) · [PHASE1.md](PHASE1.md) (the next build phase: live-URL testing) · [PLAN_MODES.md](PLAN_MODES.md) (black/grey/white pipelines, LangGraph subgraphs, live pages) · [BACKEND_AND_REMAINING_WORK.md](BACKEND_AND_REMAINING_WORK.md) (original full blueprint).
 
 ---
 
 ## 1. What Trevyn is
 
-An autonomous AI QA engineer for the CODE APEX 3.0 hackathon (iMocha track IM-02), team **Dimaag Ka Dahi**. Given a web app (a URL today; a Git repo later) and a requirement in plain English, it plans tests, runs them in a real browser, verifies failures with evidence, proposes fixes, and proves fixes with a regression run.
+An autonomous AI QA engineer for the CODE APEX 3.0 hackathon (iMocha track IM-02), team **Dimaag Ka Dahi**. Given a web app URL, an optional public GitHub repository, and a requirement in plain English, it plans tests, runs them in a real browser, verifies failures with evidence, proposes fixes, and proves fixes with a regression run. The repository connection currently contributes a file map to planning; Trevyn does not automatically execute repository scripts.
 
 **Core principle, enforced in code:** *the AI proposes, deterministic software decides.* Models write plans, hypotheses, patches and summaries; software decides what runs, what counts as a confirmed bug, permissions, retries and budgets. A failed or unrunnable test is reported as *inconclusive*, never as passed.
 
@@ -175,13 +209,13 @@ If `uv run` hangs (PyPI resets connections on this network), use `.venv\Scripts\
 | `tests/e2e_repair_loop.py` | full repair loop; expects `verified`, baseline untouched, manifest verifies |
 | `tests/try_url.py` | manual test of any live URL |
 
-Last results (24 Oct): 57/57 unit tests; both e2e scripts pass in local and Redis mode; live run against saucedemo.com on Supabase + Redis + worker passed its smoke tests; OPA tests 5/5; web typecheck, lint, `next build` clean.
+Last recorded checks (24 Oct, before the read-only audit in §14): 79 unit tests passed; targeted ESLint and `next build` passed; a read-only browser check switched between two UUID-linked runs without mixing logs. Earlier e2e scripts and a live Sauce Demo smoke run were reported successful, but they were not rerun in this audit.
 
 ---
 
 ## 9. Frontend notes
 
-- Data seam: `lib/api.ts` (client fetch, Supabase bearer token when configured), `lib/live-data.ts` (server getters, cached, only when `NEXT_PUBLIC_API_URL` set), `lib/data.ts` + `lib/demo/*` (demo fixtures).
+- Data seam: `lib/api.ts` (client fetch, Supabase bearer token when configured), `lib/live-data.ts` (live server getters; workspace seed is fetched at request time, other getters are cached), `lib/data.ts` + `lib/demo/*` (demo fixtures).
 - "Live API data" / "Demo data" chip bottom-left shows which source the shell is using.
 - Overview shows real KPIs, gate, run health and categories in live mode and hides cards with no data source (failing suites, throughput, week strip).
 - Home page on desktop: greeting and project chip hidden; TREVYN wordmark top-left (`components/shell/wordmark.tsx`, loads `public/trevyn-logo.png`, falls back to text until the user saves the image there); section tabs sit in the top bar; the old "T" rail circle is removed.
@@ -194,7 +228,7 @@ Last results (24 Oct): 57/57 unit tests; both e2e scripts pass in local and Redi
 
 - Remote: `https://github.com/harshgitty58/Trevyn.git`, branch `main`. The user commits and pushes manually.
 - Last commit: `98866fb Complete core build: LangGraph, job queue, repair loop, policy, evidence, integrations, CI`.
-- **Uncommitted at time of writing:** Windows checkpointer fix, smoke-plan fallback, OpenAI-compatible adapter + `.env.example` names, live-URL wizard changes (blank fields, URL-based project, mode suggestion), desktop header changes (wordmark, tabs, hidden greeting/chip), run-health tick fix, `tests/try_url.py`, `PHASE1.md`, `PROGRESS1.md`.
+- **Working tree on 24 Oct:** uncommitted live-URL, public GitHub repository, live-run UI/backend, tests, and documentation changes are present. Use `git status --short` for the current file list; this audit did not commit or discard any of them.
 - `.env`, `apps/web/.env.local` and `var/` are gitignored (verified).
 
 ---
@@ -212,6 +246,51 @@ Last results (24 Oct): 57/57 unit tests; both e2e scripts pass in local and Redi
 
 ## 12. What to do next
 
-Follow [PHASE1.md](PHASE1.md) in this order: A1 (AI key + `scripts/check_models.py`) → A7 passive checks and A8 project picker (parallel) → A2 discovery → A3 URL-mode rules → A4 test login → A5 selector fallback → A6 safe retest → Phase B.
+Follow [PHASE1.md](PHASE1.md) from the current implementation: finish A1 (working model IDs and structured output); then A4 test login, A5 selector fallback, A6 safe retest, A7 passive checks, and A8 project picker/history. A2 bounded discovery and A3 URL planner rules are implemented. Phase B remains later work.
 
-Before starting: run `uv run pytest -q` and `tests/e2e_golden_path.py` to confirm the baseline still passes, and check `git status` to see whether the uncommitted work in §10 was committed.
+Before changing these areas, check `git status`; this workspace contains uncommitted pipeline and live-run work. The current audit below is read-only and did not run tests or services.
+
+---
+
+## 13. Live Runs update (24 Oct)
+
+- In live API mode, `/runs/live` refreshes the run list every 3 seconds and selects an active run. `?run=<uuid>` pins a specific run while other runs continue; switching closes the prior stream and opens that run's own stream.
+- The run log loads persisted events first, then uses SSE with sequence-based catch-up. Reconnects get a fresh stream ticket for authenticated deployments. Run links from the wizard, ledger, findings, and regression panel use the stable UUID.
+- Verdict counts are persisted during execution, so the ledger and selected run update before completion. The scripted demo remains available only in demo mode.
+- `tests/test_queue.py` verifies two concurrent run streams have isolated events and counts, and two separate OS processes write to their own run logs. Latest verification: 79 tests passed, targeted ESLint passed, and `next build` completed cleanly.
+- `tests/manual_live_runs_ui.py` checked the running browser tab read-only: two existing UUID-linked runs were selectable and showed only their own persisted events.
+- Event sequence allocation locks the parent run row in Postgres and retries uniqueness conflicts, so concurrent API and worker processes cannot silently reuse one sequence number.
+- For multiple authenticated API processes, set one shared `TICKET_SECRET` on all of them. Set one shared `REDIS_URL` on API and workers for immediate cross-process event wakeups; the event stream also polls persisted events as a fallback.
+
+---
+
+## 14. Main pipeline static audit (24 Oct; no run in this audit)
+
+This section records what is wired in the current codebase. It does not claim a fresh end-to-end run or a working AI provider.
+
+| Mode | Current status | Actual behavior |
+|---|---|---|
+| Black box | Implemented for a public live URL | Bounded read-only site discovery feeds browser test planning. Playwright runs whitelisted steps against the URL, records evidence, and deterministic rules decide verdicts. With no usable planner model, non-demo sites get two generic start-page smoke cases, regardless of the requirement. |
+| Gray box | Partial planning enrichment | Requires a verified public GitHub repository. Its pinned commit and file/path map are saved with the plan and passed to the planner. Execution is still the same URL browser runner. Repository tests are suggested only; no clone, source execution, code coverage, or automatic repository test run occurs. With model fallback, the repository map does not make the two smoke cases more specific. |
+| White box | Not implemented as a live mode | The live wizard disables it. The API can accept the label on a hook-configured environment, but there is no source-level planner or executor. An externally supplied hook also skips site discovery while execution only forwards hooks marked `local_runner`, so this is not a reliable external white-box route. |
+
+**Wired path:** the wizard finds or creates a URL project, optionally connects a public GitHub repository, scans up to 10 same-site pages (depth 2, 60 seconds; GET/HEAD), generates and validates a plan, approves it automatically, and creates a run. The API checks URL/host policy; local tasks or Celery workers execute a checkpointed graph. High-risk cases pause for an approval. The Chromium Playwright runner interprets steps, collects screenshots/traces/network/console evidence, evaluates assertions, and writes per-run events. Rules classify results as passed, confirmed, needs review, or inconclusive; diagnosis and a repair prompt use AI when available and deterministic/template fallbacks otherwise. Findings, live per-run SSE logs, counts, evidence access, and an on-demand signed final manifest are wired.
+
+**Conditional or limited:** model-based, requirement-specific planning and diagnosis depend on a provider returning valid schema output. The last user-provided model check reported planner/diagnostician model IDs missing and structured JSON failing for fix/assistant; this audit did not retry them. Retesting a failed case for 2/2 reproduction requires the demo/test hook; arbitrary live URLs are not safely retried yet. Patch proposals, human approval, and regression execution work only for planted demo-shop bug flags. A public GitHub connection does not enable applying a fix to that repository.
+
+**Wizard and Phase 1 gaps:** live wizard suite toggles, time budget, parallel-worker count, synthetic-data and stop-on-critical switches, and Save draft are not submitted to the API. The staging/QA choice is not submitted either; choosing production is blocked in the wizard, while the backend's local policy only records a production-approval obligation and does not itself enforce a separate production gate. Test-account/secret fields are disabled in live mode. There is no live-site login secret flow (A4), selector healing (A5), safe live-site retest (A6), or passive security/network finding rules (A7). Project cards are real, but the project picker, project-scoped history/filtering, and edit endpoint in A8 are incomplete. Other suite pages and charts still contain demo data. Display IDs are count-derived and can repeat; UUIDs identify runs in the Live Runs tab.
+
+**Trust boundaries:** creating a project requires the caller to assert authorization, but the wizard sends `authorised: true` and the API does not independently prove ownership. GitHub verifies that the repository is public and resolves a commit; it does not establish that the repository is the code deployed at the supplied URL.
+
+### Full quality-pipeline completion checklist
+
+**Current answer: no.** LangGraph execution, database records, and black-box browser checks are implemented, but the three modes and the complete quality-check suite are not linked end to end.
+
+1. Make all configured planner/diagnostician/fix models return valid structured output; keep the generic smoke fallback clearly labelled. The last reported model check did not pass.
+2. Define and enforce a real mode contract in plan, graph, runner jobs, and results. Black box should use the URL; gray box should use verified repository insights beyond file names; white box needs an isolated checkout, source-aware analysis and test execution. The current graph executes the same browser path for every mode.
+3. Replace demo-only values and paths: `qa@shop.test` credentials and ShopFlow templates, planted-bug patch flags, static wizard attachments, and charts/pages using demo data. Connect an authorized test-account secret flow without leaking credentials into prompts or evidence.
+4. Send and enforce wizard settings in the API and workers: selected suites, environment, time budget, worker count, synthetic-data rule, stop criteria, and saved drafts. Keep plan review explicit rather than automatically approving every wizard-created plan.
+5. Complete live-site safety and quality checks: safe failure retest, selector fallback with recorded healing, passive security/network rules, and production approval enforcement. Add actual API, performance, security and compatibility executors before presenting their suite switches as active.
+6. Build a real repository repair path: isolated code changes, diff checks, human approval, repository/CI integration, and regression proof. Current patch/regression implementation only switches demo-shop bug flags.
+7. Verify deployment state: apply and inspect migrations in the configured database, use a shared LangGraph checkpointer for workers on different machines (Windows currently defaults to a local SQLite checkpoint), tighten project isolation and display-ID allocation, and verify Redis/Celery concurrency and restart/resume behavior.
+8. Run end-to-end checks for each mode on authorized targets with a real database and multiple workers. Unit tests and the earlier browser smoke check do not establish full three-mode quality coverage.

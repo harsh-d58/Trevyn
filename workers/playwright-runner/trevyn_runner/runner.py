@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from trevyn_contracts import (AssertionResult, CaseResult, DupPost, RunnerJob, RunnerResult, StepResult, TestCase)
 from .browser import launch
@@ -21,6 +21,28 @@ DUP_WINDOW_MS = 2000
 
 def redact(text: str) -> str:
     return SECRET_RE.sub("[REDACTED]", text)
+
+
+def on_response(net: list[dict], r) -> None:
+    """Records the status on the matching request, and where a redirect points so status checks can follow it."""
+    for n in reversed(net):
+        if n["url"] == redact(r.url) and "status" not in n:
+            n["status"] = r.status
+            if 300 <= r.status < 400 and (loc := r.headers.get("location")):
+                n["location"] = redact(urljoin(r.url, loc))
+            return
+
+
+def final_status(net: list[dict], path: str) -> int | None:
+    """Status of the latest request for `path`, judged where its redirects land (/dist -> 301 -> /dist/ -> 200)."""
+    i = next((i for i in range(len(net) - 1, -1, -1) if net[i]["path"] == path), None)
+    for _ in range(5):
+        loc = net[i].get("location") if i is not None else None
+        nxt = next((j for j in range(i + 1, len(net)) if net[j]["url"] == loc), None) if loc else None
+        if nxt is None:
+            break
+        i = nxt
+    return net[i].get("status") if i is not None else None
 
 
 def locate(page: Page, target: str):
@@ -48,6 +70,14 @@ def compare(observed, op: str, expected) -> bool:
     except (TypeError, ValueError):
         return False
     return False
+
+
+async def settle(page: Page) -> None:
+    """A live page may poll forever; network idle is a best-effort pause, not a pass condition."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=5000)
+    except PlaywrightTimeoutError:
+        pass
 
 
 async def hook_count(job: RunnerJob, name: str) -> int | None:
@@ -88,8 +118,7 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
     t0 = time.monotonic()
     page.on("request", lambda r: net.append({"t": int((time.monotonic() - t0) * 1000), "method": r.method,
                                              "path": urlparse(r.url).path, "url": redact(r.url)}))
-    page.on("response", lambda r: next((n.__setitem__("status", r.status) for n in reversed(net)
-                                         if n["url"] == redact(r.url) and "status" not in n), None))
+    page.on("response", lambda r: on_response(net, r))
     page.on("requestfailed", lambda r: setattr(res, "failed_requests", res.failed_requests + 1))
     page.on("console", lambda m: console.append({"type": m.type, "text": redact(m.text)}))
     page.on("pageerror", lambda e: console.append({"type": "error", "text": redact(str(e))}))
@@ -107,7 +136,8 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
                 url = urljoin(job.target.base_url, s.target or "/")
                 if urlparse(url).hostname not in allowed:
                     raise PermissionError(f"target {url} not on allowlist")
-                await page.goto(url, wait_until="networkidle")
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await settle(page)
             elif s.action == "reset":
                 sr.ok = await hook_reset(job)
                 for k in baselines:
@@ -126,7 +156,7 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
                     await loc.select_option(s.value or "", timeout=8000)
                 elif s.action == "press":
                     await loc.press(s.value or "Enter", timeout=8000)
-                await page.wait_for_load_state("networkidle")
+                await settle(page)
         except Exception as e:  # step failure is data
             sr.ok, sr.error = False, f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"
         sr.t_ms = int((time.monotonic() - st) * 1000)
@@ -157,7 +187,7 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path) -> CaseResu
                 elif a.kind == "network_posts":
                     obs = sum(1 for n in net if n["method"] == "POST" and n["path"] == a.subject)
                 elif a.kind == "status":
-                    obs = next((n.get("status") for n in reversed(net) if n["path"] == a.subject), None)
+                    obs = final_status(net, a.subject)
                 else:  # db_row_count: change in the hook's count since the case started
                     after, before = await hook_count(job, a.subject), baselines.get(a.subject)
                     obs = None if after is None or before is None else after - before

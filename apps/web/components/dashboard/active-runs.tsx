@@ -14,14 +14,20 @@ const TAB: Record<FindingType, [string, string]> = {
 }
 const BAR: Record<RunStatus, string> = { running: "var(--det)", passed: "var(--ok)", failed: "var(--bad)", warn: "var(--warn)", stopped: "var(--muted-foreground)" }
 
+/** API runs carry an ISO timestamp; demo runs carry display text ("Just now") */
+const when = (s: string) => {
+  const d = new Date(s)
+  return /^\d{4}-/.test(s) && !isNaN(+d) ? d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : s
+}
+
 function FolderCard({ run }: { run: RunSummary }) {
   const [tint, type] = TAB[run.type]
   const [pill, label] = RUN_STATUS[run.status]
   return (
-    <Link href={run.status === "running" ? "/runs/live" : `/runs?run=${run.id}`} className="press group block">
+    <Link href={run.uuid ? `/runs/live?run=${run.uuid}` : run.status === "running" ? "/runs/live" : `/runs?run=${run.id}`} className="press group block">
       <motion.div className="flex items-center justify-between rounded-t-[18px] px-4 pt-2.5 pb-5 text-[11.5px] font-medium text-[#33405e]"
         style={{ background: tint }} whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 26 }}>
-        <span>{run.started}</span>
+        <span suppressHydrationWarning>{when(run.started)}</span>
         <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10.5px] font-semibold">{run.trigger}</span>
       </motion.div>
       <div className="glass-1 spot -mt-3 rounded-[18px] p-4 transition-shadow group-hover:shadow-(--shadow-float)">
@@ -50,17 +56,18 @@ function FolderCard({ run }: { run: RunSummary }) {
 export function ActiveRuns() {
   const runs = useLive((s) => s.runs)
   const live = useLive((s) => s.run)
+  const real = useLive((s) => s.source) === "live"
   return (
     <section>
       <div className="mb-3 flex items-end justify-between">
         <div>
           <h2 className="text-[15px] font-semibold">Active runs</h2>
-          <p className="text-[11.5px] text-muted-foreground">Today across ShopFlow · tab colour = test type</p>
+          <p className="text-[11.5px] text-muted-foreground">{real ? "Latest runs across all projects" : "Today across ShopFlow"} · tab colour = test type</p>
         </div>
         <Link href="/runs" className="text-[12px] font-medium text-brand hover:underline">All runs</Link>
       </div>
       <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-        {runs.slice(0, 4).map((r) => <FolderCard key={r.id} run={live?.id === r.id && r.status === "running" ? { ...r, passed: live.done } : r} />)}
+        {runs.slice(0, 4).map((r) => <FolderCard key={r.uuid ?? r.id} run={live?.id === r.id && r.status === "running" ? { ...r, passed: live.done } : r} />)}
       </div>
     </section>
   )

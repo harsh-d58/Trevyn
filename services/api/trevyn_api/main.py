@@ -11,7 +11,7 @@ for line in (Path(".env").read_text().splitlines() if Path(".env").exists() else
 
 import asyncio  # noqa: E402
 import json  # noqa: E402
-from contextlib import asynccontextmanager  # noqa: E402
+from contextlib import asynccontextmanager, suppress  # noqa: E402
 from datetime import UTC, timedelta  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
 
@@ -28,7 +28,7 @@ from trevyn_orch.models import ModelUnavailable, adapter, observed  # noqa: E402
 from trevyn_runner.discover import discover  # noqa: E402
 from trevyn_contracts import SiteMap  # noqa: E402
 
-from . import auth, insights, integrations, manifest, plans_ext, policy, repairs, runs, storage, targets  # noqa: E402
+from . import events, auth, insights, integrations, manifest, plans_ext, policy, repairs, repositories, runs, storage, targets  # noqa: E402
 from .common import Problem, get_or_404  # noqa: E402
 from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run, SiteMapRecord,  # noqa: E402
                  RunEvent, Session, init_db, now, session)
@@ -94,6 +94,9 @@ class ProjectIn(BaseModel):
 
 def project_json(p: Project, envs: list[Environment]) -> dict:
     return {"id": p.id, "name": p.name, "allowed_domains": p.allowed_domains,
+            "repository": ({"url": p.repository_url, "ref": p.repository_ref, "sha": p.repository_sha,
+                            "checked_at": p.repository_checked_at.isoformat() if p.repository_checked_at else None,
+                            "file_map": p.repository_map} if p.repository_url else None),
             "environments": [{"id": e.id, "name": e.name, "base_url": e.base_url, "is_production": e.is_production} for e in envs]}
 
 
@@ -121,6 +124,48 @@ async def create_project(body: ProjectIn, s: AsyncSession = Depends(session)):
     await s.commit()
     await runs.audit("user", "project.create", "project", p.id, domains=domains)
     return project_json(p, [e])
+
+
+class RepositoryIn(BaseModel):
+    url: str
+    ref: str | None = None
+
+
+@app.put("/api/projects/{pid}/repository")
+async def connect_repository(pid: str, body: RepositoryIn, s: AsyncSession = Depends(session)):
+    project = await get_or_404(s, Project, pid)
+    env = await s.scalar(select(Environment).where(Environment.project_id == pid))
+    try:
+        info = await repositories.inspect_public_repo(body.url, body.ref,
+                                                      site_path=urlparse(env.base_url).path if env else "")
+    except repositories.RepositoryError as exc:
+        raise Problem(exc.status, "repository_connection_failed", exc.detail) from exc
+    project.repository_url = info.url
+    project.repository_ref = info.ref
+    project.repository_sha = info.sha
+    project.repository_map = info.file_map
+    project.repository_checked_at = now()
+    await s.commit()
+    await runs.audit("user", "repository.connect", "project", project.id, url=info.url, ref=info.ref, sha=info.sha)
+    return {"url": info.url, "ref": info.ref, "sha": info.sha, "checked_at": project.repository_checked_at.isoformat(),
+            "file_map": info.file_map}
+
+
+@app.get("/api/projects/{pid}/repository")
+async def get_repository(pid: str, s: AsyncSession = Depends(session)):
+    project = await get_or_404(s, Project, pid)
+    if not project.repository_url:
+        raise Problem(404, "not_found", "No GitHub repository connected to this project")
+    return project_json(project, [])["repository"]
+
+
+@app.delete("/api/projects/{pid}/repository", status_code=204)
+async def disconnect_repository(pid: str, s: AsyncSession = Depends(session)):
+    project = await get_or_404(s, Project, pid)
+    project.repository_url = project.repository_ref = project.repository_sha = None
+    project.repository_map = project.repository_checked_at = None
+    await s.commit()
+    await runs.audit("user", "repository.disconnect", "project", project.id)
 
 
 # ---------- plans ----------
@@ -171,6 +216,7 @@ def plan_json(p: Plan, site_map: dict | None = None) -> dict:
     return {"id": p.id, "project_id": p.project_id, "version": p.version, "status": p.status, "source": p.source, "requirement": p.requirement,
             "test_mode": p.test_mode, "risk_level": p.risk_level, "stack_hypotheses": p.stack_hypotheses,
             "test_cases": p.test_cases, "site_map_id": p.site_map_id, "site_map": site_map,
+            "repository_sha": p.repository_sha, "repository_map": p.repository_map,
             "created_at": p.created_at.isoformat()}
 
 
@@ -181,18 +227,26 @@ async def create_plan(pid: str, body: PlanIn, s: AsyncSession = Depends(session)
                  s.scalar(select(Environment).where(Environment.project_id == pid)))
     if not env or env.project_id != proj.id:
         raise Problem(404, "not_found", "Environment not found in this project")
+    if not env.hook_url and body.mode not in ("black_box", "gray_box"):
+        raise Problem(422, "validation_error", "Live URL projects support black-box or gray-box planning")
+    if body.mode == "gray_box" and not proj.repository_sha:
+        raise Problem(422, "validation_error", "Connect a public GitHub repository before gray-box planning")
     snapshot = await site_snapshot(s, proj, env) if not env.hook_url else None
     site_map = SiteMap.model_validate(snapshot.content) if snapshot else None
     draft, usages, source = await planner.generate(body.requirement, env.base_url, proj.allowed_domains, body.mode,
-                                                    site_map=site_map, has_hook=bool(env.hook_url))
+                                                    site_map=site_map, has_hook=bool(env.hook_url),
+                                                    repository_map=proj.repository_map if body.mode == "gray_box" else None)
     for u in usages:
         await runs.record_model(u, None)
     risk = max((tc.risk for tc in draft.test_cases), key=["low", "medium", "high"].index, default="low")
     p = Plan(project_id=pid, environment_id=env.id, requirement=body.requirement, test_mode=body.mode, source=source, risk_level=risk,
              site_map_id=snapshot.id if snapshot else None,
+             repository_sha=proj.repository_sha if body.mode == "gray_box" else None,
+             repository_map=proj.repository_map if body.mode == "gray_box" else None,
              stack_hypotheses=draft.stack_hypotheses, test_cases=[tc.model_dump(exclude_none=True) for tc in draft.test_cases])
     s.add(p)
     await s.commit()
+    await events.publish(pid, "plan_ready", {"id": p.id, "cases": len(p.test_cases), "source": p.source})
     return plan_json(p, snapshot.content if snapshot else None)
 
 
@@ -210,6 +264,7 @@ async def decide_plan(plan_id: str, decision: str, s: AsyncSession = Depends(ses
     p = await get_or_404(s, Plan, plan_id)
     p.status = "approved" if decision == "approve" else "rejected"
     await s.commit()
+    await events.publish(p.project_id, "plan_updated", {"id": p.id, "status": p.status})
     await runs.audit("user", f"plan.{decision}", "plan", p.id)
     snapshot = await s.get(SiteMapRecord, p.site_map_id) if p.site_map_id else None
     return plan_json(p, snapshot.content if snapshot else None)
@@ -231,7 +286,7 @@ def run_json(r: Run) -> dict:
         "warn" if c.get("inconclusive") else "passed")
     return {"id": r.display_id, "uuid": r.id, "name": r.name, "type": "ui", "state": r.state, "status": web_status,
             "passed": c.get("passed", 0), "total": total, "counts": c, "duration": f"{dur // 60}m {dur % 60:02d}s",
-            "trigger": r.trigger, "started": r.started_at.isoformat(), "people": ["AC"]}
+            "trigger": r.trigger, "started": aware(r.started_at).isoformat(), "people": ["AC"]}
 
 
 @app.post("/api/runs", status_code=201)
@@ -267,6 +322,7 @@ async def create_run(s: AsyncSession, plan: Plan, name: str | None = None, idemp
                       "; ".join(dec["reasons"]))
     await s.commit()
     await runs.audit(actor, "run.start", "run", run.id, obligations=dec["obligations"])
+    await events.publish(proj.id, "run_created", {"run": run.display_id, "uuid": run.id})
     runs.dispatch("run", run.id)
     return run
 
@@ -289,9 +345,12 @@ async def run_events(run_id: str, after_seq: int = 0, s: AsyncSession = Depends(
 
 
 @app.get("/api/runs/{run_id}/events/stream")
-async def stream_events(run_id: str, request: Request, s: AsyncSession = Depends(session)):
+async def stream_events(run_id: str, request: Request, after_seq: int = 0, s: AsyncSession = Depends(session)):
     r = await get_or_404(s, Run, run_id)
-    last = int(request.headers.get("last-event-id") or 0)
+    try:
+        last = max(0, after_seq, int(request.headers.get("last-event-id") or 0))
+    except ValueError:
+        last = max(0, after_seq)
 
     async def rows_after(seq: int):
         async with Session() as s2:
@@ -309,9 +368,15 @@ async def stream_events(run_id: str, request: Request, s: AsyncSession = Depends
                     yield {"id": str(e.seq), "event": "run_event", "data": json.dumps(runs.event_json(e))}
                 done, _ = await asyncio.wait({bell}, timeout=5)
                 if done:
+                    try:
+                        bell.result()
+                    except (StopAsyncIteration, Exception):
+                        await asyncio.sleep(5)  # subscriber unavailable; keep polling the database
                     bell = asyncio.ensure_future(anext(sub))
         finally:
             bell.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await bell
             await sub.aclose()
 
     return EventSourceResponse(gen(), ping=15)
@@ -332,7 +397,7 @@ def finding_json(f: Finding, run_display: str = "") -> dict:
     return {"id": f.display_id, "title": f.title, "severity": f.severity, "type": f.category, "column": f.board_column,
             "verdict": WEB_VERDICT.get(f.status, "inconclusive"), "status": f.status,
             "confidence": {"high": 92, "medium": 70, "low": 45}.get(((f.diagnosis or {}).get("hypotheses") or [{}])[0].get("confidence"), 40),
-            "evidence": len(f.evidence_ids), "owner": "AC", "runId": run_display}
+            "evidence": len(f.evidence_ids), "owner": "AC", "runId": run_display, "runUuid": f.run_id}
 
 
 @app.get("/api/findings")
@@ -364,6 +429,7 @@ async def move_finding(fid: str, body: BoardIn, s: AsyncSession = Depends(sessio
         raise Problem(409, "policy_denied", "A fix reaches Verified only after its regression rerun passes")
     f.board_column = body.column
     await s.commit()
+    await events.publish(f.project_id, "finding_updated", {"id": f.display_id, "column": body.column})
     await runs.audit("user", "finding.move", "finding", f.id, column=body.column)
     return finding_json(f)
 
@@ -425,6 +491,7 @@ async def decide(aid: str, body: DecisionIn, request: Request, s: AsyncSession =
     a.status, a.decided_by, a.decision_reason, a.decided_at = ("approved" if body.approve else "rejected"), user["sub"], body.reason, now()
     await s.commit()
     await runs.audit(user["sub"], "approval.decide", "approval", a.id, approve=body.approve)
+    await events.publish(a.project_id, "approval_decided", {"id": a.display_id, "approve": body.approve})
     if a.subject_type == "patch":
         await repairs.on_decision(s, a, body.approve)
     elif a.subject_type == "run_gate":  # the run is parked at a LangGraph interrupt; continue it from its checkpoint
@@ -488,5 +555,5 @@ async def chat(body: ChatIn, s: AsyncSession = Depends(session)):
 
 
 # routers added in the core build (auth, plans, repairs, manifest, insights)
-for _r in (auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router):
+for _r in (auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router, events.router):
     app.include_router(_r)

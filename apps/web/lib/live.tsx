@@ -3,8 +3,10 @@
 // repair loop. The island, Overview, Runs, Live run, Board, Approvals, Repair and Regression all read it.
 // In production it is fed by GET /api/runs/{id}/events (SSE). Until then useDemoStream() plays
 // LIVE_SCRIPT (the prototype's 17-step run with an approval gate). See PORTING_PLAN.md §3.5–3.6.
+import { useRouter } from "next/navigation"
 import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react"
 import { toast } from "sonner"
+import { api, API_URL, type Items } from "./api"
 import { RELEASE_APPROVAL, gateApproval } from "./demo/core"
 import { LIVE_SCRIPT } from "./demo/runs"
 import type { Approval, BoardColumn, Finding, Provenance, RunSummary, ScriptEntry, Workspace } from "./types"
@@ -17,11 +19,14 @@ export type LogLine = ScriptEntry & { i: number }
 export type LiveRun = {
   id: string; name: string; total: number; done: number; failed: number; inconclusive: number
   startedAt: number; state: RunState; log: LogLine[]; cursor: number; gateApproved: boolean
+  /** set only for real runs from the API; demo runs come from LIVE_SCRIPT */
+  uuid?: string; apiState?: string
 }
 export type RepairState = "pending" | "running" | "done"
 type Pair = [number, number]
 
 export type LiveState = {
+  source: "live" | "demo"
   run: LiveRun | null
   flash: Flash | null
   queue: Flash[]
@@ -51,13 +56,33 @@ function replay(executed: number) {
   return { cursor, log, failed: log.filter((l) => l.fx === "fail").length, inconclusive: log.filter((l) => l.fx === "inconclusive").length }
 }
 
+const TERMINAL_RUN = new Set(["COMPLETED", "FAILED", "CANCELLED", "BLOCKED"])
+const sameDay = (iso: string, now = new Date()) => { const d = new Date(iso); return !isNaN(+d) && d.toDateString() === now.toDateString() }
+
+/** The island's run in live mode: the newest unfinished API run, else the newest run (shown as finished). */
+function apiRun(runs: RunSummary[], prev: LiveRun | null): LiveRun | null {
+  const r = runs.find((x) => x.state ? !TERMINAL_RUN.has(x.state) : x.status === "running") ?? runs[0]
+  if (!r) return null
+  const active = r.state ? !TERMINAL_RUN.has(r.state) : r.status === "running"
+  const kept = prev?.uuid === r.uuid ? prev : null // progress arrives as run_progress events between list refreshes
+  return {
+    id: r.id, uuid: r.uuid, apiState: r.state, name: r.name, total: Math.max(r.total, kept?.total ?? 0),
+    done: active ? kept?.done ?? 0 : r.total, failed: r.total - r.passed, inconclusive: 0,
+    startedAt: Date.parse(r.started) || 0, log: [], cursor: 0, gateApproved: r.state !== "AWAITING_APPROVAL",
+    state: r.state === "AWAITING_APPROVAL" ? "gate" : active ? "running" : r.status === "stopped" ? "stopped" : "done",
+  }
+}
+
 function createLiveStore(initial: Workspace) {
+  const live = initial.source === "live"
   const seed = initial.runs.find((r) => r.status === "running")
   let state: LiveState = {
-    run: seed ? { id: seed.id, name: seed.name, total: seed.total, done: seed.passed, startedAt: 0, state: "running", gateApproved: true, ...replay(seed.passed) } : null,
+    source: live ? "live" : "demo",
+    run: live ? apiRun(initial.runs, null)
+      : seed ? { id: seed.id, name: seed.name, total: seed.total, done: seed.passed, startedAt: 0, state: "running", gateApproved: true, ...replay(seed.passed) } : null,
     flash: null,
     queue: [],
-    events: [
+    events: live ? [] : [
       { id: 1, kind: "ai", text: "Test plan v3 generated · 46 tests" },
       { id: 2, kind: "human", text: "High-impact tests approved by Alex Chen" },
       { id: 3, kind: "bad", text: "CHECKOUT-014 failed · 2 orders for 1 click" },
@@ -69,7 +94,7 @@ function createLiveStore(initial: Workspace) {
     repair: "pending",
     releaseRequested: false,
     loop: initial.summary.loop,
-    runsToday: 6,
+    runsToday: live ? initial.runs.filter((r) => sameDay(r.started)).length : 6,
     muted: false,
   }
   const listeners = new Set<() => void>()
@@ -94,6 +119,14 @@ function createLiveStore(initial: Workspace) {
     subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
     flash,
     log,
+    /** replaces lists with fresh API data after a workspace event; the island's run follows the runs list */
+    sync(p: Partial<Pick<LiveState, "findings" | "runs" | "approvals" | "loop">>) {
+      set((s) => ({ ...p, ...(p.runs && { run: apiRun(p.runs, s.run), runsToday: p.runs.filter((r) => sameDay(r.started)).length }) }))
+    },
+    /** UI-lane progress of a real run (workspace event run_progress) */
+    progress(uuid: string, done: number, total: number) {
+      if (state.run?.uuid === uuid) patchRun({ done, total: Math.max(total, state.run.total) })
+    },
 
     /** clock-dependent fields are seeded after mount so prerendering stays deterministic */
     boot() {
@@ -295,7 +328,8 @@ const LiveContext = createContext<LiveStore | null>(null)
 
 export function LiveProvider({ initial, children }: { initial: Workspace; children: React.ReactNode }) {
   const [store] = useState(() => createLiveStore(initial))
-  useDemoStream(store, initial.source !== "live") // live API: real runs stream per run via SSE (components/runs/real-run-view)
+  useDemoStream(store, initial.source !== "live")
+  useWorkspaceEvents(store, initial.source === "live") // live API: one workspace feed per tab; each run also has its own SSE
   return <LiveContext.Provider value={store}>{children}</LiveContext.Provider>
 }
 
@@ -323,4 +357,85 @@ function useDemoStream(store: LiveStore, enabled: boolean) {
     }, 320)
     return () => clearInterval(id)
   }, [store, enabled])
+}
+
+export type WorkspaceEvent = { id: number; type: string; payload: Record<string, string | number | boolean>; ts?: string }
+const FLASH: Record<string, (p: WorkspaceEvent["payload"]) => [FlashKind, string, string] | null> = {
+  finding_created: (p) => p.status === "confirmed" ? ["finding", `${p.id} confirmed · ${p.severity}`, `/findings/${p.id}`] : null,
+  approval_created: (p) => ["approval", `${p.id} needs a decision · ${p.title}`, "/approvals"],
+  run_state: (p) => p.state === "COMPLETED" ? ["done", `${p.run} completed`, `/runs/live?run=${p.uuid}`] : null,
+}
+
+const LOG_LINE: Record<string, (p: WorkspaceEvent["payload"]) => [LiveEvent["kind"], string]> = {
+  run_created: (p) => ["det", `${p.run} queued · policy gate passed`],
+  run_state: (p) => [p.state === "FAILED" ? "bad" : "det", `${p.run} → ${String(p.state).toLowerCase().replace(/_/g, " ")}`],
+  finding_created: (p) => [p.status === "confirmed" ? "bad" : "det", `${p.id} ${p.status} · ${p.category}`],
+  approval_created: (p) => ["human", `${p.id} waiting · ${p.title}`],
+  approval_decided: (p) => ["human", `${p.id} ${p.approve ? "approved" : "rejected"}`],
+  plan_ready: (p) => ["ai", `Plan ready · ${p.cases} tests (${p.source})`],
+}
+
+/** One readable line for a workspace event (island panel, notifications); null for events nobody reads */
+export const describeEvent = (e: WorkspaceEvent) => LOG_LINE[e.type]?.(e.payload) ?? null
+
+/** GET /api/events/stream: every change in the workspace rings once; the store refetches the lists and server-rendered
+ * pages refresh, debounced so a burst of events (a run finishing) costs one round of requests. */
+function useWorkspaceEvents(store: LiveStore, enabled: boolean) {
+  const router = useRouter()
+  useEffect(() => {
+    if (!enabled) return
+    let mounted = true, failures = 0, last = 0
+    let source: EventSource | null = null
+    let retry: ReturnType<typeof setTimeout> | null = null
+    let debounce: ReturnType<typeof setTimeout> | null = null
+    const resync = () => {
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(async () => {
+        const [findings, runs, approvals, overview] = await Promise.all([
+          api<Items<Finding>>("/api/findings"), api<Items<RunSummary>>("/api/runs"), api<Items<Approval>>("/api/approvals?status=pending"),
+          api<{ loop: LiveState["loop"] }>("/api/dashboard/overview"),
+        ]).catch(() => [null, null, null, null] as const)
+        if (!mounted) return
+        if (findings && runs && approvals && overview) {
+          store.sync({ findings: findings.items, runs: runs.items, approvals: approvals.items, loop: overview.loop })
+        }
+        router.refresh()
+      }, 700)
+    }
+    const connect = async () => {
+      if (!mounted) return
+      try {
+        const { ticket } = await api<{ ticket: string }>("/api/sse-ticket", { method: "POST" })
+        if (!mounted) return
+        source = new EventSource(`${API_URL}/api/events/stream?after_id=${last}&ticket=${encodeURIComponent(ticket)}`)
+        source.onopen = () => { failures = 0 }
+        source.addEventListener("workspace", (m) => {
+          try {
+            const e = JSON.parse((m as MessageEvent).data) as WorkspaceEvent
+            last = Math.max(last, e.id)
+            const p = e.payload
+            if (e.type === "run_progress") { store.progress(String(p.uuid), Number(p.done), Number(p.total)); return }
+            const f = FLASH[e.type]?.(p)
+            if (f) store.flash(...f)
+            const line = LOG_LINE[e.type]?.(p)
+            if (line) store.log(...line)
+            resync()
+          } catch { /* a malformed event is skipped; the next one resyncs everything */ }
+        })
+        source.onerror = () => {
+          source?.close()
+          if (mounted) retry = setTimeout(() => { void connect() }, Math.min(1000 * 2 ** failures++, 15000))
+        }
+      } catch {
+        if (mounted) retry = setTimeout(() => { void connect() }, Math.min(1000 * 2 ** failures++, 15000))
+      }
+    }
+    void connect()
+    return () => {
+      mounted = false
+      source?.close()
+      if (retry) clearTimeout(retry)
+      if (debounce) clearTimeout(debounce)
+    }
+  }, [store, enabled, router])
 }
