@@ -18,7 +18,7 @@ from .common import Problem
 from .db import AuditLog, Project, ProjectMember, Session, User
 
 ORDER = ["viewer", "engineer", "qa_lead", "owner"]
-OPEN_PATHS = ("/healthz", "/readyz", "/docs", "/openapi.json", "/redoc", "/api/webhooks/")
+OPEN_PATHS = ("/healthz", "/readyz", "/docs", "/openapi.json", "/redoc", "/api/webhooks/", "/trace/")  # /trace/ = static viewer code, no data
 DEV_USER = {"sub": "dev", "email": "dev@local", "name": "Local dev", "role": "owner", "approver": True}
 _TICKET_KEY = (os.getenv("TICKET_SECRET") or secrets.token_hex(16)).encode()
 

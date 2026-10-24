@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -23,12 +24,13 @@ from langgraph.types import Command
 from trevyn_orch import graph as rg
 from trevyn_orch.pipeline import TERMINAL, check
 
-from .db import (Approval, AuditLog, Environment, Evidence, Finding, ModelCall, Plan, Project, Run, RunEvent, Session, SiteMapRecord, now)
+from .db import (Approval, AuditLog, Environment, Evidence, Finding, ModelCall, Plan, Project, Run, RunEvent, Session, SiteMapRecord, now, uid)
 
 log = logging.getLogger("trevyn.runs")
 EVIDENCE_DIR = Path(os.getenv("EVIDENCE_DIR", "var/evidence"))
 RESUME_WAIT_S = 30.0  # a decision can arrive before the graph has checkpointed its interrupt
 STALE_AFTER = timedelta(minutes=15)
+ACTIVITY_KINDS = ("node", "lane", "step", "verdict", "finding", "gate", "report", "diagnosis", "log")
 
 _local_subscribers: dict[str, set[asyncio.Queue]] = defaultdict(set)
 _seq_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -135,6 +137,7 @@ class Ctx:
         self.evidence_dir = str(EVIDENCE_DIR)
         self.counts = {key: (run.counts or {}).get(key, 0) for key in ("passed", "failed", "inconclusive")}
         self._cancel = False
+        self._last_activity = 0.0
 
     async def _refresh_cancel(self) -> None:
         async with Session() as s:
@@ -169,7 +172,21 @@ class Ctx:
             from . import events
             await events.publish(self.project_id, "run_progress", {"run": self.display_id, "uuid": self.run_id,
                                                                    "done": data.get("done", 0), "total": data.get("total", 0)})
+        await self._announce(kind, summary, status)
         await self._refresh_cancel()
+
+    async def _announce(self, kind: str, summary: str, status: str | None) -> None:
+        """The island's live line: what the run is doing right now. Verdicts, findings, gates and reports always go
+        out; routine steps, lanes and node changes at most once a second so a busy run doesn't flood the feed."""
+        if kind not in ACTIVITY_KINDS:
+            return
+        moment = time.monotonic()
+        if kind in ("step", "lane", "node", "log") and moment - self._last_activity < 1.0:
+            return
+        self._last_activity = moment
+        from . import events
+        await events.publish(self.project_id, "run_activity", {"run": self.display_id, "uuid": self.run_id, "kind": kind,
+                                                               "summary": summary[:160], "status": status or ""})
 
     async def open_gate(self, title: str, reason: str, risk: str) -> tuple[str, str, bool]:
         """Writes the approval for this gate, or returns the one already written (the graph re-enters the gate node on
@@ -218,7 +235,24 @@ class Ctx:
         if verdict.status == "confirmed" and severity == "high":
             from .integrations import notify
             await notify(f"Trevyn confirmed {f.display_id} ({severity}): {tc.title}")
+        if verdict.status in ("needs_review", "inconclusive"):
+            await self.request_review(f.id, f.display_id, tc.title, verdict)
         return f.display_id
+
+    async def request_review(self, finding_id: str, finding_display: str, title: str, verdict: Verdict) -> None:
+        """Human in the loop for uncertain results: the rules could not prove or disprove this failure, so a person
+        decides. Approve = it is a real bug (confirmed); reject = dismissed."""
+        why = verdict.reason or verdict.rule or "the verifier could not prove it"
+        async with Session() as s:
+            ap = Approval(id=uid(), display_id=await next_display(Approval, self.project_id, "AP", 1), project_id=self.project_id,
+                          subject_type="finding_review", subject_id=finding_id, title=f"Review {finding_display}: {title}"[:300],
+                          reason=f"Uncertain result ({why}). Approve if this is a real bug, reject to dismiss it.",
+                          risk="medium" if verdict.status == "needs_review" else "low")
+            s.add(ap)
+            await s.commit()
+            ap_display = ap.display_id
+        from . import events
+        await events.publish(self.project_id, "approval_created", {"id": ap_display, "run": self.display_id, "title": f"Review {finding_display}"})
 
     async def record_model(self, usage: Usage, run_id: str) -> None:
         await record_model(usage, run_id)
@@ -258,6 +292,39 @@ async def _invoke(run_id: str, deps: rg.Deps, payload) -> None:
             log.exception("run %s could not be marked FAILED", run_id)
 
 
+# States in which a run is actively using the browser, network and CPU. A run waiting at an approval gate is not:
+# a person may take hours, and the queue must not stall behind them.
+EXECUTING = ("RUNNING", "COLLECTING_EVIDENCE", "VERIFYING", "FINDINGS_READY", "INCONCLUSIVE", "REPORTING", "CANCELLING")
+SLOT_POLL_SECONDS = 3
+
+
+async def wait_for_slot(run_id: str) -> bool:
+    """One run executes at a time (lanes share one machine; overlapping runs made each other time out). A queued run
+    starts when no other run is executing and no earlier-queued run is waiting (first come, first served). Checked in
+    the database so it holds for in-process runs and for any number of Celery workers. False if cancelled meanwhile."""
+    announced = None
+    while True:
+        async with Session() as s:
+            me = await s.get(Run, run_id)
+            if me is None or me.state not in ("QUEUED",) or me.cancel_requested:
+                return me is not None and not me.cancel_requested
+            blocker = await s.scalar(select(Run).where(Run.id != run_id, Run.state.in_(EXECUTING))
+                                     .order_by(Run.started_at).limit(1))
+            if blocker is None:
+                blocker = await s.scalar(select(Run).where(Run.id != run_id, Run.state == "QUEUED",
+                                                           Run.started_at < me.started_at).order_by(Run.started_at).limit(1))
+        if blocker is None:
+            return True
+        if blocker.id != announced:
+            announced = blocker.id
+            note = f"Queued: waiting for {blocker.display_id} to finish (one run executes at a time)"
+            await append_event(run_id, "det", "log", note, "waiting", {"blocked_by": blocker.display_id})
+            from . import events
+            await events.publish(me.project_id, "run_activity", {"run": me.display_id, "uuid": run_id, "kind": "queue",
+                                                                 "summary": note, "status": "waiting"})
+        await asyncio.sleep(SLOT_POLL_SECONDS)
+
+
 async def execute_run(run_id: str) -> None:
     async with _run_locks[run_id]:
         _, deps = await _load(run_id)
@@ -267,6 +334,9 @@ async def execute_run(run_id: str) -> None:
         except Exception as e:
             log.exception("run %s failed validation", run_id)
             await deps.ctx.state("FAILED", f"{type(e).__name__}: {e}"[:300])
+            return
+        if not await wait_for_slot(run_id):
+            await deps.ctx.state("CANCELLED", "cancelled while queued")  # QUEUED → CANCELLED is allowed
             return
         await _invoke(run_id, deps, {"run_id": run_id, "case_ids": [c.test_case_id for c in deps.cases]})
 

@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trevyn quality report · {{ f.run.id }}</title>
+<style>
+  @page { size: A4; }
+  :root { --ink:#0b1a3d; --muted:#5b6478; --line:#e3e7ef; --brand:#4f46e5; --teal:#0f9f8f; --bad:#d93a3f; --warn:#d98a06;
+          --ok:#15924b; --soft:#f5f7fb; --ai:#7c5cf0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 10.5pt/1.5 "Segoe UI", Inter, Arial, sans-serif; color: var(--ink); -webkit-print-color-adjust: exact; }
+  .page { padding: 10mm 14mm 6mm; }
+  .break { break-before: page; }
+  h1 { font-size: 30pt; line-height:1.1; margin: 0 0 6pt; letter-spacing:-.5pt; }
+  h2 { font-size: 17pt; margin: 0 0 2pt; letter-spacing:-.2pt; }
+  h3 { font-size: 10.5pt; margin: 14pt 0 6pt; text-transform: uppercase; letter-spacing: .8pt; color: var(--muted); }
+  p { margin: 0 0 6pt; }
+  .muted { color: var(--muted); }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 9pt; }
+  .eyebrow { font-size: 8.5pt; letter-spacing: 1.6pt; text-transform: uppercase; color: var(--brand); font-weight: 700; }
+  .wordmark { font: 700 20pt Georgia, "Times New Roman", serif; letter-spacing: 1.5pt; color: var(--brand); }
+  .cover { min-height: 255mm; display:flex; flex-direction:column; }
+  .cover .band { background: linear-gradient(135deg, #eef0ff 0%, #e8fbf7 100%); border-radius: 14pt; padding: 22pt 24pt; margin-top: 18pt; }
+  .meta { display:grid; grid-template-columns: 110pt 1fr; gap: 3pt 10pt; font-size: 9.5pt; margin-top: 12pt; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin:0; word-break: break-all; }
+  .kpis { display:grid; grid-template-columns: repeat(4, 1fr); gap: 8pt; margin: 14pt 0; }
+  .kpi { border:1px solid var(--line); border-radius: 10pt; padding: 9pt 11pt; background:#fff; }
+  .kpi .v { font-size: 19pt; font-weight: 600; line-height: 1.1; }
+  .kpi .l { font-size: 8.5pt; color: var(--muted); }
+  .risk { display:inline-block; padding: 3pt 10pt; border-radius: 99pt; font-weight:700; font-size: 9pt; text-transform: uppercase; letter-spacing: .8pt; }
+  .risk.high { background:#fde8e8; color: var(--bad); } .risk.medium { background:#fff3dc; color: var(--warn); } .risk.low { background:#e3f6ea; color: var(--ok); }
+  .summary { background: var(--soft); border-left: 3pt solid var(--ai); border-radius: 6pt; padding: 10pt 12pt; margin-top: 10pt; }
+  .src { font-size: 8pt; color: var(--muted); margin-top: 4pt; }
+  .toc { margin-top: auto; columns: 2; font-size: 9.5pt; }
+  .toc div { padding: 2pt 0; border-bottom: 1px dotted var(--line); }
+  .head { display:flex; align-items: baseline; justify-content: space-between; border-bottom: 2px solid var(--ink); padding-bottom: 6pt; margin-bottom: 10pt; }
+  .num { font-size: 9pt; color: var(--muted); }
+  table { width:100%; border-collapse: collapse; font-size: 9pt; margin: 4pt 0 8pt; }
+  th { text-align:left; font-weight:600; color: var(--muted); font-size: 8pt; text-transform: uppercase; letter-spacing:.5pt; border-bottom: 1px solid var(--line); padding: 4pt 5pt; }
+  td { border-bottom: 1px solid var(--line); padding: 4pt 5pt; vertical-align: top; word-break: break-word; }
+  tr { break-inside: avoid; }
+  .pill { display:inline-block; padding: 1pt 7pt; border-radius: 99pt; font-size: 8pt; font-weight: 600; white-space: nowrap; }
+  .p-passed,.p-ok,.p-low { background:#e3f6ea; color: var(--ok); } .p-failed,.p-high { background:#fde8e8; color: var(--bad); }
+  .p-inconclusive,.p-errored,.p-medium,.p-issues-found,.p-warn,.p-needs-improvement { background:#fff3dc; color: var(--warn); }
+  .p-not-run,.p-not-applicable,.p-not-recorded,.p-pending { background:#eef0f4; color: var(--muted); }
+  .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 10pt; }
+  .card { border:1px solid var(--line); border-radius: 10pt; padding: 9pt 11pt; break-inside: avoid; }
+  .verdict { margin-top: 12pt; border-radius: 10pt; padding: 11pt 13pt; background: var(--soft); break-inside: avoid; }
+  .verdict .lbl { font-size: 8pt; font-weight:700; text-transform: uppercase; letter-spacing: 1pt; margin: 8pt 0 3pt; }
+  .verdict .lbl.ai { color: var(--ai); margin-top: 0; } .verdict .lbl.must { color: var(--bad); } .verdict .lbl.sugg { color: var(--warn); }
+  .verdict ul { margin: 0; padding-left: 14pt; } .verdict li { margin: 2pt 0; }
+  .none { color: var(--muted); font-style: italic; }
+  .bars .row { display:grid; grid-template-columns: 110pt 1fr 60pt; align-items:center; gap: 6pt; font-size: 9pt; margin: 3pt 0; }
+  .track { background: #eef0f4; height: 8pt; border-radius: 99pt; overflow:hidden; display:flex; }
+  .seg { height: 100%; }
+</style>
+</head>
+<body>
+{% macro pill(status) -%}<span class="pill p-{{ (status or 'not run') | replace(' ', '-') | lower }}">{{ status or 'not run' }}</span>{%- endmacro %}
+{% macro ring(score, size=64) -%}
+  {% set s = score or 0 %}{% set c = 'var(--ok)' if s >= 90 else ('var(--warn)' if s >= 50 else 'var(--bad)') %}
+  <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.9" fill="none" stroke="#eef0f4" stroke-width="3.2"/>
+  <circle cx="18" cy="18" r="15.9" fill="none" stroke="{{ c }}" stroke-width="3.2" stroke-linecap="round" stroke-dasharray="{{ s }} {{ 100 - s }}" transform="rotate(-90 18 18)"/>
+  <text x="18" y="21" text-anchor="middle" font-size="9" font-weight="700" fill="#0b1a3d">{{ score if score is not none else '—' }}</text></svg>
+{%- endmacro %}
+{% macro verdict(key) -%}
+  {% set nt = notes[key] %}
+  <div class="verdict">
+    <div class="lbl ai">What this means</div><p>{{ nt.explanation }}</p>
+    <div class="lbl must">Must fix</div>
+    {% if nt.must_fix %}<ul>{% for x in nt.must_fix %}<li>{{ x }}</li>{% endfor %}</ul>{% else %}<p class="none">Nothing required from this run.</p>{% endif %}
+    <div class="lbl sugg">Suggested</div>
+    {% if nt.suggested %}<ul>{% for x in nt.suggested %}<li>{{ x }}</li>{% endfor %}</ul>{% else %}<p class="none">No further suggestions.</p>{% endif %}
+  </div>
+{%- endmacro %}
+
+<!-- ======================= cover ======================= -->
+<section class="page cover">
+  <div class="wordmark">TREVYN</div>
+  <div class="band">
+    <div class="eyebrow">Quality engineering report</div>
+    <h1>{{ f.run.name }}</h1>
+    <div><span class="risk {{ n.overall_risk }}">{{ n.overall_risk }} risk</span> &nbsp;<span class="muted">{{ f.run.id }} · {{ f.run.state | lower }}</span></div>
+    <dl class="meta">
+      <dt>Project</dt><dd>{{ f.project.name }}</dd>
+      <dt>Target</dt><dd>{{ f.run.target or '—' }}</dd>
+      {% if f.project.repository %}<dt>Repository</dt><dd>{{ f.project.repository }}</dd>{% endif %}
+      <dt>Mode</dt><dd>{{ f.run.mode or '—' }} · plan by {{ f.run.plan_source or '—' }}</dd>
+      <dt>Run started</dt><dd>{{ f.run.started }} · {{ f.run.duration }}</dd>
+      <dt>Report generated</dt><dd>{{ generated }}</dd>
+    </dl>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">{{ f.totals.passed }}/{{ f.totals.cases }}</div><div class="l">test cases passed</div></div>
+    <div class="kpi"><div class="v" style="color:var(--bad)">{{ f.totals.severity.high }}</div><div class="l">high-severity findings</div></div>
+    <div class="kpi"><div class="v" style="color:var(--warn)">{{ f.totals.severity.medium }}</div><div class="l">medium-severity findings</div></div>
+    <div class="kpi"><div class="v">{{ f.totals.findings }}</div><div class="l">findings in total</div></div>
+  </div>
+  {% if f.run.requirement %}<h3>Requirement under test</h3><p class="muted">{{ f.run.requirement }}</p>{% endif %}
+  <h3>Executive summary</h3>
+  <div class="summary">{{ n.executive_summary }}</div>
+  <div class="src">{% if source == 'model' %}Narrative written by AI from the measured results only; every number comes from the run.{% else %}Narrative generated from rules (AI unavailable); every number comes from the run.{% endif %}</div>
+  <h3>Contents</h3>
+  <div class="toc">{% for k in sections %}<div>{{ loop.index }}. {{ titles[k] }}</div>{% endfor %}<div>{{ sections | length + 1 }}. Action plan</div></div>
+</section>
+
+<!-- ======================= 1 · Browser & UI ======================= -->
+<section class="page break">
+  <div class="head"><h2>Browser &amp; UI</h2><span class="num">1 / {{ sections | length }}</span></div>
+  <div class="kpis">
+    <div class="kpi"><div class="v" style="color:var(--ok)">{{ f.totals.passed }}</div><div class="l">passed</div></div>
+    <div class="kpi"><div class="v" style="color:var(--bad)">{{ f.totals.failed }}</div><div class="l">failed</div></div>
+    <div class="kpi"><div class="v" style="color:var(--warn)">{{ f.totals.inconclusive }}</div><div class="l">inconclusive</div></div>
+    <div class="kpi"><div class="v">{{ f.ui.console_errors }}</div><div class="l">console errors</div></div>
+  </div>
+  <h3>Test cases</h3>
+  <table><tr><th>Case</th><th>Title</th><th>Risk</th><th>Result</th></tr>
+    {% for c in f.ui.cases %}<tr><td class="mono">{{ c.id }}</td><td>{{ c.title }}</td><td>{{ c.risk }}</td><td>{{ pill(c.verdict) }}</td></tr>{% else %}<tr><td colspan="4" class="none">No test cases in this run.</td></tr>{% endfor %}
+  </table>
+  {% if f.ui.failed_steps %}<h3>Steps that failed</h3>
+  <table><tr><th>Case</th><th>Step</th></tr>{% for s in f.ui.failed_steps %}<tr><td class="mono">{{ s.case }}</td><td>{{ s.step }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if f.ui.accessibility %}<h3>Accessibility (axe-core, WCAG 2.1 A/AA)</h3>
+  <table><tr><th>Rule</th><th>Issue</th><th>Severity</th></tr>{% for a in f.ui.accessibility %}<tr><td class="mono">{{ a.rule }}</td><td>{{ a.title }}</td><td>{{ pill(a.severity) }}</td></tr>{% endfor %}</table>{% endif %}
+  <p class="muted">{{ f.ui.screenshots }} screenshots and {{ f.ui.traces }} Playwright traces were recorded as evidence.</p>
+  {{ verdict('ui') }}
+</section>
+
+<!-- ======================= 2 · API ======================= -->
+<section class="page break">
+  <div class="head"><h2>API &amp; integration</h2><span class="num">2 / {{ sections | length }}</span></div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">{{ f.api.calls }}</div><div class="l">data calls made by the app</div></div>
+    <div class="kpi"><div class="v">{{ f.api.endpoints | length }}</div><div class="l">endpoints</div></div>
+    <div class="kpi"><div class="v" style="color:var(--bad)">{{ f.api.endpoints | sum(attribute='errors') }}</div><div class="l">error responses</div></div>
+    <div class="kpi"><div class="v" style="font-size:12pt">{{ f.api.contract_tests or 'not run' }}</div><div class="l">contract tests</div></div>
+  </div>
+  <h3>Endpoints the app called</h3>
+  <table><tr><th>Method</th><th>Path</th><th>Requests</th><th>Errors</th><th>p50</th><th>p95</th></tr>
+    {% for e in f.api.endpoints %}<tr><td class="mono">{{ e.method }}</td><td class="mono">{{ e.path }}</td><td>{{ e.requests }}</td><td>{{ e.errors }}</td><td>{{ e.p50_ms if e.p50_ms is not none else '—' }}{% if e.p50_ms is not none %} ms{% endif %}</td><td>{{ e.p95_ms if e.p95_ms is not none else '—' }}{% if e.p95_ms is not none %} ms{% endif %}</td></tr>
+    {% else %}<tr><td colspan="6" class="none">{{ f.api.note or 'No API calls recorded.' }}</td></tr>{% endfor %}
+  </table>
+  {{ verdict('api') }}
+</section>
+
+<!-- ======================= 3 · Performance ======================= -->
+<section class="page break">
+  <div class="head"><h2>Performance</h2><span class="num">3 / {{ sections | length }}</span></div>
+  <h3>Lighthouse score per page</h3>
+  <div style="display:flex; gap:14pt; flex-wrap:wrap">
+    {% for p in f.performance.lighthouse %}<div style="text-align:center; width: 110pt">{{ ring(p.score) }}<div class="mono" style="word-break:break-all">{{ p.page }}</div></div>
+    {% else %}<p class="none">Lighthouse did not measure a page in this run.</p>{% endfor %}
+  </div>
+  {% if f.performance.metrics %}<h3>Lab metrics against Google's "good" thresholds</h3>
+  <table><tr><th>Page</th><th>Metric</th><th>Value</th><th>Good ≤</th><th>Status</th></tr>
+    {% for m in f.performance.metrics %}<tr><td class="mono">{{ m.page }}</td><td>{{ m.metric }}</td><td>{{ m.value }}{% if m.unit and m.unit != 'score' %} {{ m.unit }}{% endif %}</td><td>{{ m.budget if m.budget is not none else '—' }}</td><td>{{ pill(m.status) }}</td></tr>{% endfor %}
+  </table>{% endif %}
+  {% if f.performance.vitals_failed %}<h3>Real-browser web vitals over budget</h3>
+  <table><tr><th>Page</th><th>Metric</th><th>Measured</th><th>Good ≤</th></tr>
+    {% for v in f.performance.vitals_failed %}{% set u = '' if v.metric == 'CLS' else ' ms' %}<tr><td class="mono">{{ v.path }}</td><td>{{ v.metric }}</td><td>{{ v.value }}{{ u }}</td><td>{{ v.budget }}{{ u }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if f.performance.opportunities %}<h3>Biggest opportunities</h3>
+  <table><tr><th>Opportunity</th><th>Page</th><th>Estimated saving</th></tr>
+    {% for o in f.performance.opportunities %}<tr><td>{{ o.name }}</td><td class="mono">{{ o.page }}</td><td>{{ o.saving_ms }} ms</td></tr>{% endfor %}</table>{% endif %}
+  <p class="muted">Load test (many users): {{ f.performance.load_test }}.</p>
+  {{ verdict('performance') }}
+</section>
+
+<!-- ======================= 4 · Security ======================= -->
+<section class="page break">
+  <div class="head"><h2>Security</h2><span class="num">4 / {{ sections | length }}</span></div>
+  {% set hi, me, lo = f.totals.severity.high, f.totals.severity.medium, f.totals.severity.low %}{% set tot = (hi + me + lo) or 1 %}
+  <div class="grid2">
+    <div class="card"><h3 style="margin-top:0">Checks</h3>
+      <table><tr><th>Check</th><th>Result</th></tr>{% for r in f.security.rules %}<tr><td>{{ r.rule }}</td><td>{{ pill(r.status) }}</td></tr>{% endfor %}</table>
+    </div>
+    <div class="card"><h3 style="margin-top:0">Findings by severity</h3>
+      <div class="bars">
+        {% for lbl, v, col in [('High', hi, 'var(--bad)'), ('Medium', me, 'var(--warn)'), ('Low', lo, 'var(--ok)')] %}
+        <div class="row"><span>{{ lbl }}</span><div class="track"><div class="seg" style="width: {{ (v / tot * 100) | round(1) }}%; background: {{ col }}"></div></div><span>{{ v }}</span></div>
+        {% endfor %}
+      </div>
+      <p class="muted" style="margin-top:8pt">ZAP passive baseline: {{ f.security.zap_status }} ({{ f.security.zap_alerts }} alert types).<br>
+      Repository scan: {{ f.security.repository.status or 'not run' }} · OSV {{ f.security.repository.osv or 'not run' }} · Gitleaks {{ f.security.repository.gitleaks or 'not run' }}.</p>
+    </div>
+  </div>
+  <h3>Security issues</h3>
+  <table><tr><th>ID</th><th>Rule</th><th>Issue</th><th>Severity</th></tr>
+    {% for i in f.security.issues %}<tr><td class="mono">{{ i.id }}</td><td class="mono">{{ i.rule }}</td><td>{{ i.title }}</td><td>{{ pill(i.severity) }}</td></tr>
+    {% else %}<tr><td colspan="4" class="none">No security issues recorded.</td></tr>{% endfor %}
+  </table>
+  {% if f.security.repository.findings %}<h3>Repository (dependencies and secrets)</h3>
+  <table><tr><th>Issue</th><th>Severity</th></tr>{% for x in f.security.repository.findings %}<tr><td>{{ x.title }}</td><td>{{ pill(x.severity) }}</td></tr>{% endfor %}</table>{% endif %}
+  {{ verdict('security') }}
+</section>
+
+<!-- ======================= 5 · Compatibility ======================= -->
+<section class="page break">
+  <div class="head"><h2>Compatibility</h2><span class="num">5 / {{ sections | length }}</span></div>
+  {% set e = f.compatibility.environment or {} %}
+  <p>Primary run: <b>{{ e.browser or 'chromium' }} {{ e.version or '' }}</b> on {{ e.os or '—' }} {{ e.os_version or '' }}{% if e.viewport %}, {{ e.viewport.width }}×{{ e.viewport.height }}{% endif %}.</p>
+  <h3>Other browsers</h3>
+  <div class="bars">
+    {% for b, c in f.compatibility.browsers.items() %}{% set t = (c.passed + c.failed + c.errored + c['not run']) or 1 %}
+    <div class="row"><span>{{ b }}</span><div class="track">
+      <div class="seg" style="width:{{ c.passed / t * 100 }}%; background:var(--ok)"></div><div class="seg" style="width:{{ c.failed / t * 100 }}%; background:var(--bad)"></div>
+      <div class="seg" style="width:{{ c.errored / t * 100 }}%; background:var(--warn)"></div><div class="seg" style="width:{{ c['not run'] / t * 100 }}%; background:#c9ced8"></div></div>
+      <span>{{ c.passed }}/{{ t }} passed</span></div>
+    {% else %}<p class="none">{{ f.compatibility.note or 'Other browsers were not run for this run.' }}</p>{% endfor %}
+  </div>
+  {% if f.compatibility.matrix %}<h3>Case × browser</h3>
+  <table><tr><th>Case</th><th>Browser</th><th>Result</th><th>Note</th></tr>
+    {% for r in f.compatibility.matrix %}<tr><td class="mono">{{ r.case }}</td><td>{{ r.browser }}</td><td>{{ pill(r.status) }}</td><td class="muted">{{ r.note }}</td></tr>{% endfor %}</table>{% endif %}
+  {{ verdict('compatibility') }}
+</section>
+
+<!-- ======================= 6 · Network ======================= -->
+<section class="page break">
+  <div class="head"><h2>Network &amp; traces</h2><span class="num">6 / {{ sections | length }}</span></div>
+  {% set t = f.network.totals or {} %}
+  <div class="kpis">
+    <div class="kpi"><div class="v">{{ t.requests or 0 }}</div><div class="l">requests captured</div></div>
+    <div class="kpi"><div class="v" style="color:var(--bad)">{{ t.errors or 0 }}</div><div class="l">4xx / 5xx responses</div></div>
+    <div class="kpi"><div class="v" style="color:var(--bad)">{{ t.duplicatePosts or 0 }}</div><div class="l">duplicate POSTs (≤ 2 s)</div></div>
+    <div class="kpi"><div class="v">{{ f.network.files or 0 }}</div><div class="l">journeys captured</div></div>
+  </div>
+  {% set codes = f.network.status_codes or {} %}{% set ctot = (codes.values() | sum) or 1 %}
+  <h3>Status codes</h3>
+  <div class="bars">{% for k, v in codes.items() %}
+    <div class="row"><span>{{ k }}</span><div class="track"><div class="seg" style="width:{{ v / ctot * 100 }}%; background:{{ 'var(--ok)' if k == '2xx' else 'var(--teal)' if k == '3xx' else 'var(--warn)' if k == '4xx' else 'var(--bad)' }}"></div></div><span>{{ v }}</span></div>
+  {% else %}<p class="none">No traffic captured.</p>{% endfor %}</div>
+  {% if f.network.slowest %}<h3>Slowest endpoints (p95)</h3>
+  <table><tr><th>Method</th><th>Path</th><th>Requests</th><th>p95</th></tr>
+    {% for e in f.network.slowest %}<tr><td class="mono">{{ e.method }}</td><td class="mono">{{ e.path }}</td><td>{{ e.requests }}</td><td>{{ e.p95 if e.p95 is not none else '—' }}{% if e.p95 is not none %} ms{% endif %}</td></tr>{% endfor %}</table>{% endif %}
+  {{ verdict('network') }}
+</section>
+
+<!-- ======================= 7 · Analytics ======================= -->
+<section class="page break">
+  <div class="head"><h2>Analytics &amp; trends</h2><span class="num">7 / {{ sections | length }}</span></div>
+  {% set fl = f.analytics.flow or {} %}
+  <div class="kpis">
+    <div class="kpi"><div class="v">{{ fl.detected or 0 }}</div><div class="l">findings detected</div></div>
+    <div class="kpi"><div class="v" style="color:var(--bad)">{{ fl.confirmed or 0 }}</div><div class="l">confirmed</div></div>
+    <div class="kpi"><div class="v" style="color:var(--warn)">{{ (fl.needs_review or 0) + (fl.inconclusive or 0) }}</div><div class="l">uncertain</div></div>
+    <div class="kpi"><div class="v">${{ '%.3f' | format(f.analytics.model_cost_usd or 0) }}</div><div class="l">AI cost for this run</div></div>
+  </div>
+  <h3>Recent runs of this project</h3>
+  <div class="bars">{% for r in f.analytics.history %}{% set rt = r.total or 1 %}
+    <div class="row"><span class="mono">{{ r.id }} · {{ r.started }}</span><div class="track"><div class="seg" style="width:{{ r.passed / rt * 100 }}%; background:var(--ok)"></div><div class="seg" style="width:{{ (r.total - r.passed) / rt * 100 }}%; background:#f3c9cb"></div></div><span>{{ r.passed }}/{{ r.total }}</span></div>
+  {% endfor %}</div>
+  {% if f.analytics.by_type %}<h3>Findings by type</h3>
+  <table><tr><th>Type</th><th>Findings</th></tr>{% for t in f.analytics.by_type %}<tr><td>{{ t.label }}</td><td>{{ t.count }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if f.analytics.flaky %}<h3>Flaky tests</h3>
+  <table><tr><th>Case</th><th>Flake rate</th><th>Last runs</th></tr>{% for x in f.analytics.flaky %}<tr><td class="mono">{{ x.case }}</td><td>{{ x.rate }}%</td><td>{{ x.passed }} passed · {{ x.failed }} failed</td></tr>{% endfor %}</table>{% endif %}
+  {{ verdict('analytics') }}
+</section>
+
+<!-- ======================= Action plan ======================= -->
+<section class="page break">
+  <div class="head"><h2>Action plan</h2><span class="num">{{ f.run.id }}</span></div>
+  <h3 style="color:var(--bad)">Must fix</h3>
+  {% set any_must = namespace(v=false) %}
+  <table><tr><th style="width:120pt">Area</th><th>Change</th></tr>
+    {% for k in sections %}{% for x in notes[k].must_fix %}{% set any_must.v = true %}<tr><td>{{ titles[k] }}</td><td>{{ x }}</td></tr>{% endfor %}{% endfor %}
+    {% if not any_must.v %}<tr><td colspan="2" class="none">Nothing must be fixed based on this run.</td></tr>{% endif %}
+  </table>
+  <h3 style="color:var(--warn)">Suggested</h3>
+  <table><tr><th style="width:120pt">Area</th><th>Change</th></tr>
+    {% for k in sections %}{% for x in notes[k].suggested %}<tr><td>{{ titles[k] }}</td><td>{{ x }}</td></tr>{% endfor %}{% endfor %}
+  </table>
+  <p class="src">Evidence for every number (screenshots, traces, network logs, scanner reports) is stored with {{ f.run.id }} in Trevyn.</p>
+</section>
+</body>
+</html>

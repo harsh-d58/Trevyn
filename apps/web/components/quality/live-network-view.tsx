@@ -71,12 +71,12 @@ export function LiveNetworkView({ data: initial, graphs: initialGraphs = [] }: {
           {data.artifacts.filter((item) => item.har || item.trace).map((item) => <div key={item.case} className="glass-inset flex flex-wrap items-center gap-3 rounded-lg p-3">
             <b className="font-mono">{item.case}</b>
             {item.har && <a className="text-brand underline" href={API_URL + item.har} download>Download HAR</a>}
-            {item.trace && <a className="text-brand underline" href={`https://trace.playwright.dev/?trace=${encodeURIComponent(API_URL + item.trace)}`} target="_blank" rel="noreferrer">Open trace</a>}
+            {item.trace && <a className="text-brand underline" href={`${API_URL}/trace/index.html?trace=${encodeURIComponent(API_URL + item.trace)}`} target="_blank" rel="noreferrer">Open trace</a>}
             {item.trace && <a className="text-brand underline" href={API_URL + item.trace} download>Download trace</a>}
           </div>)}
         </div> : <Empty what="No HAR or traces recorded" why="Run browser cases to capture per-case network and trace files." />}
       </Card>
-      {graphs.map((graph, i) => graph?.nodes.length ? <Card key={i} title={i === 0 ? "Service map" : "API call graph"}><div className="h-[300px]"><FlowMap nodes={graph.nodes} edges={graph.edges} w={graph.w} h={graph.h} /></div></Card> : null)}
+      {graphs.map((graph, i) => graph?.nodes.length ? <Card key={i} title={i === 0 ? "Service map" : "API call graph"}><div><FlowMap nodes={graph.nodes} edges={graph.edges} w={graph.w} h={graph.h} /></div></Card> : null)}
       <StatStrip items={[
         ["Requests", data.totals.requests, `${data.files} captured journeys`, "det"],
         ["Errors (4xx/5xx)", data.totals.errors, data.totals.requests ? `${((100 * data.totals.errors) / data.totals.requests).toFixed(1)}% of requests` : "—", data.totals.errors ? "bad" : "ok"],

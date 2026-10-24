@@ -32,6 +32,8 @@ export type LiveState = {
   scope: string | null
   project: string | null
   run: LiveRun | null
+  /** the island's live line: the latest thing the island's run did (step, lane, verdict, finding, queue wait) */
+  activity: { uuid: string; kind: string; text: string; status: string } | null
   flash: Flash | null
   queue: Flash[]
   events: LiveEvent[]
@@ -65,7 +67,11 @@ const sameDay = (iso: string, now = new Date()) => { const d = new Date(iso); re
 
 /** The island's run in live mode: the newest unfinished API run, else the newest run (shown as finished). */
 function apiRun(runs: RunSummary[], prev: LiveRun | null): LiveRun | null {
-  const r = runs.find((x) => x.state ? !TERMINAL_RUN.has(x.state) : x.status === "running") ?? runs[0]
+  // the run actually executing beats one waiting at a gate, which beats one queued behind it
+  const rank = (x: RunSummary) => !x.state ? (x.status === "running" ? 1 : 9) : TERMINAL_RUN.has(x.state) ? 9
+    : ["QUEUED", "CREATED", "VALIDATING_INPUT"].includes(x.state) ? 3 : x.state === "AWAITING_APPROVAL" ? 2 : 1
+  const best = runs.reduce<RunSummary | undefined>((m, x) => (rank(x) < 9 && (!m || rank(x) < rank(m)) ? x : m), undefined)
+  const r = best ?? runs[0]
   if (!r) return null
   const active = r.state ? !TERMINAL_RUN.has(r.state) : r.status === "running"
   const kept = prev?.uuid === r.uuid ? prev : null // progress arrives as run_progress events between list refreshes
@@ -84,6 +90,7 @@ function createLiveStore(initial: Workspace) {
     source: live ? "live" : "demo",
     scope: initial.scope ?? null,
     project: initial.project ?? null,
+    activity: null,
     run: live ? apiRun(initial.runs, null)
       : seed ? { id: seed.id, name: seed.name, total: seed.total, done: seed.passed, startedAt: 0, state: "running", gateApproved: true, ...replay(seed.passed) } : null,
     flash: null,
@@ -126,12 +133,24 @@ function createLiveStore(initial: Workspace) {
     flash,
     log,
     /** replaces lists with fresh API data after a workspace event; the island's run follows the runs list */
-    sync(p: Partial<Pick<LiveState, "findings" | "runs" | "approvals" | "loop">>) {
-      set((s) => ({ ...p, ...(p.runs && { run: apiRun(p.runs, s.run), runsToday: p.runs.filter((r) => sameDay(r.started)).length }) }))
+    sync(p: Partial<Pick<LiveState, "findings" | "runs" | "approvals" | "loop">> & { allRuns?: RunSummary[] }) {
+      const { allRuns, ...lists } = p
+      set((s) => ({ ...lists, ...(allRuns && { run: apiRun(allRuns, s.run), runsToday: allRuns.filter((r) => sameDay(r.started)).length }) }))
+    },
+    /** the island's run, from every project: a run in another project must still show as live */
+    async refreshIsland() {
+      if (state.source !== "live") return
+      const all = await api<Items<RunSummary>>("/api/runs?limit=25").catch(() => null)
+      if (all) store.sync({ allRuns: all.items })
+    },
+    /** a run_activity workspace event: the island shows it as its live line */
+    activity(uuid: string, kind: string, text: string, status: string) {
+      set(() => ({ activity: { uuid, kind, text, status } }))
     },
     /** refetches every list for the current scope (live mode) */
     async reload() {
       if (state.source !== "live") return
+      void store.refreshIsland()
       const run = state.scope
       if (!run) {
         const runs = await api<Items<RunSummary>>(`/api/runs${state.project ? `?project=${encodeURIComponent(state.project)}` : ""}`).catch(() => null)
@@ -472,6 +491,11 @@ function useWorkspaceEvents(store: LiveStore, enabled: boolean) {
             last = Math.max(last, e.id)
             const p = e.payload
             if (e.type === "run_progress") { store.progress(String(p.uuid), Number(p.done), Number(p.total)); return }
+            if (e.type === "run_activity") {
+              store.activity(String(p.uuid), String(p.kind), String(p.summary), String(p.status))
+              if (store.get().run?.uuid !== p.uuid) void store.refreshIsland() // a run the island hasn't seen yet
+              return
+            }
             const f = FLASH[e.type]?.(p)
             if (f) store.flash(...f)
             const line = LOG_LINE[e.type]?.(p)

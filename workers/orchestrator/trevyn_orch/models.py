@@ -17,6 +17,7 @@ ROUTING = {
     "diagnostician": os.getenv("MODEL_DIAGNOSTICIAN", "claude-opus-5-5"),
     "fix": os.getenv("MODEL_FIX", "claude-opus-5-5"),
     "assistant": os.getenv("MODEL_ASSISTANT", "claude-opus-5-5"),
+    "report": os.getenv("MODEL_REPORT", "claude-haiku-5-5"),  # PDF report narrative: cheap, facts are given
 }
 PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}  # $/MTok, 2026-10
 
@@ -206,7 +207,7 @@ class OpenAICompatAdapter:
     MODEL_PROVIDER=openrouter|fastrouter|openai_compat, LLM_API_KEY, LLM_BASE_URL, and one model per node (LLM_MODEL_PLANNER, …).
     Plain httpx, no SDK. Model output is validated against the Pydantic schema; a bad reply falls back to rules."""
 
-    NODES = ("planner", "diagnostician", "fix", "assistant")
+    NODES = ("planner", "diagnostician", "fix", "assistant", "report")
 
     def __init__(self) -> None:
         self.key = os.getenv("LLM_API_KEY", "")
@@ -216,7 +217,7 @@ class OpenAICompatAdapter:
         self.models = {n: os.getenv(f"LLM_MODEL_{n.upper()}", default) for n in self.NODES}
         # Gateways reserve credit for the longest possible reply; without a cap a low balance refuses big models (402)
         self.max_tokens = {n: int(os.getenv(f"LLM_MAX_TOKENS_{n.upper()}", d)) for n, d in
-                           (("planner", 6000), ("diagnostician", 2500), ("fix", 2000), ("assistant", 2000))}
+                           (("planner", 6000), ("diagnostician", 2500), ("fix", 2000), ("assistant", 2000), ("report", 6000))}
 
     @property
     def available(self) -> bool:

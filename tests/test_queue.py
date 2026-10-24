@@ -155,3 +155,26 @@ async def test_dispatch_is_local_without_redis(monkeypatch):
     assert runs.dispatch("run", "abc") == "local"
     await asyncio.sleep(0)
     assert seen == ["abc"]
+
+
+async def test_one_run_executes_at_a_time(run, monkeypatch):
+    """A queued run waits while another run executes, says so in its log, and starts once that run finishes.
+    Other runs left in the shared test database must not block it, so they are parked first."""
+    monkeypatch.setattr(runs, "SLOT_POLL_SECONDS", 0.05)
+    async with Session() as s:
+        for other in (await s.scalars(select(Run).where(Run.id != run.id, Run.state.in_([*runs.EXECUTING, "QUEUED"])))).all():
+            other.state = "COMPLETED"
+        nxt = Run(display_id=await runs.next_display(Run, run.project_id, "RUN", 1), project_id=run.project_id,
+                  plan_id=run.plan_id, environment_id=run.environment_id, name="next", state="QUEUED")
+        s.add(nxt)
+        await s.commit()
+        nxt_id = nxt.id
+    waiter = asyncio.ensure_future(runs.wait_for_slot(nxt_id))
+    await asyncio.sleep(0.3)
+    assert not waiter.done()  # blocked by the RUNNING run
+    async with Session() as s:
+        (await s.get(Run, run.id)).state = "COMPLETED"
+        await s.commit()
+        logged = (await s.scalars(select(RunEvent).where(RunEvent.run_id == nxt_id))).all()
+    assert any("waiting for" in e.summary for e in logged)
+    assert await asyncio.wait_for(waiter, 2) is True

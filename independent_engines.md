@@ -29,3 +29,14 @@ Updated: 25 October 2026. This file tracks the five rule-based lanes requested f
 4. The scanner binaries in `var/tools` are local to this machine (gitignored). For CI or a new machine, install them or set `OSV_SCANNER_BIN` / `GITLEAKS_BIN`. The ZAP image is `zaproxy/zap-stable` (≈3.8 GB).
 
 No Git commit or push was performed. The user should review the diff and run Git commands manually.
+
+## Update — 25 Oct: fixes from the PRAHAR run
+
+- **One run at a time** (`runs.wait_for_slot`): a queued run waits ("Queued: waiting for RUN-x to finish") until no run is executing and no earlier run is waiting; checked in the database, so it holds in-process and across Celery workers. Runs parked at an approval gate don't block the queue. Verified: PRAHAR + TodoMVC started back to back never overlapped.
+- **Lane budgets:** Firefox/WebKit/iPhone run side by side (`COMPAT_MAX_SECONDS`, default 300); Lighthouse 60 s per page (`LIGHTHOUSE_MAX_SECONDS`, default 240); Gitleaks runs before OSV (it was starved of time); a slow repo checkout reports "checkout timed out" instead of crashing.
+- **Expected vs actual** (`trevyn_orch/expectations.py`): every scanner finding states the rule as Expected and the observation as Actual (e.g. "TTFB stays within 800 ms" / "Measured TTFB = 1584.9 ms on /examples/vue/dist/").
+- **Human in the loop:** every inconclusive / needs-review finding opens a `finding_review` approval ("Uncertain diagnoses"); approve = confirmed, reject = dismissed. The live run page has an "Approvals for this run" card.
+- **Island:** follows the executing run in any project (not only the selected one) and shows its live activity line (`run_activity` events, throttled to ~1/s for routine steps).
+- **Diagrams:** `FlowMap` sizes itself from its nodes' real bounds; cards grow with the diagram. New templates: Performance (page → metrics vs thresholds) and Compatibility (case × browser matrix). API testing counts every same-host XHR/fetch call. Verified: all 7 QE pages, two runs, 0 nodes outside their card.
+- **ZAP** now reports "Docker engine is not running (start Docker Desktop)" when Docker is down.
+- **Checks:** 111 Python tests, Ruff, TypeScript, full ESLint, production build.

@@ -169,7 +169,7 @@ async def api_calls(run_id: str, s: AsyncSession = Depends(session)):
     b = await load_run_bundle(s, run_id)
     host = urlparse(b["environment"].base_url).hostname if b["environment"] else None
     rows = [r for r in await _traffic(b) if r.get("resourceType") in ("xhr", "fetch")
-            and urlparse(str(r.get("url") or "")).hostname == host and str(r.get("path") or "").startswith("/api/")]
+            and urlparse(str(r.get("url") or "")).hostname == host]  # every data call the app makes, not only /api/*
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in rows:
         groups[(str(row.get("method") or "GET"), str(row.get("path") or ""))].append(row)
@@ -181,7 +181,7 @@ async def api_calls(run_id: str, s: AsyncSession = Depends(session)):
                           "p50_ms": timings[len(timings) // 2] if timings else None,
                           "p95_ms": timings[min(len(timings) - 1, int(len(timings) * .95))] if timings else None})
     return {"run": _run(b), "calls": rows, "endpoints": endpoints, "contract_tests": "not run",
-            "reason": None if rows else "No same-host /api/ XHR or fetch calls were recorded for this run."}
+            "reason": None if rows else "The app made no XHR or fetch calls to its own host during this run."}
 
 
 @router.get("/api/runs/{run_id}/perf")

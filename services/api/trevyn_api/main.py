@@ -28,7 +28,7 @@ from trevyn_orch.models import ModelUnavailable, adapter, observed  # noqa: E402
 from trevyn_runner.discover import discover  # noqa: E402
 from trevyn_contracts import SiteMap  # noqa: E402
 
-from . import events, auth, diagrams, insights, integrations, manifest, plans_ext, policy, repairs, repositories, run_views, runs, storage, targets  # noqa: E402
+from . import events, auth, diagrams, report, insights, integrations, manifest, plans_ext, policy, repairs, repositories, run_views, runs, storage, targets  # noqa: E402
 from .common import Problem, get_or_404  # noqa: E402
 from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run, SiteMapRecord,  # noqa: E402
                  RunEvent, Session, init_db, now, session)
@@ -473,7 +473,8 @@ async def get_evidence_url(eid: str, request: Request, s: AsyncSession = Depends
 # ---------- approvals ----------
 def approval_json(a: Approval, run: Run | None = None, project: Project | None = None) -> dict:
     """`run`/`runUuid` are set for run gates so any page can decide the gate of the run it shows."""
-    cat = {"run_gate": "High-impact tests", "patch": "Accepting patches", "plan": "Uncertain diagnoses"}.get(a.subject_type, "Release and risk calls")
+    cat = {"run_gate": "High-impact tests", "patch": "Accepting patches", "plan": "Uncertain diagnoses",
+           "finding_review": "Uncertain diagnoses"}.get(a.subject_type, "Release and risk calls")
     return {"id": a.display_id, "uuid": a.id, "title": a.title, "why": a.reason, "category": cat, "project": project.name if project else "",
             "run": run.display_id if run else None, "runUuid": run.id if run else None,
             "priority": "urgent" if a.risk == "high" else "low", "risk": a.risk, "status": a.status, "when": a.created_at.isoformat(), "who": "AC"}
@@ -485,11 +486,15 @@ async def list_approvals(status: str = "pending", run: str | None = None, s: Asy
     if status != "all":
         q = q.where(Approval.status == status)
     rows = (await s.scalars(q)).all()
-    runs_by_id = {r.id: r for r in (await s.scalars(select(Run).where(Run.id.in_([a.subject_id for a in rows if a.subject_type == "run_gate"])))).all()}
-    if run:  # one run's gates, by uuid or display id
-        rows = [a for a in rows if a.subject_type == "run_gate" and (a.subject_id == run or getattr(runs_by_id.get(a.subject_id), "display_id", None) == run)]
+    # the run each approval belongs to: a gate's subject is the run, a review's subject is a finding of that run
+    review_runs = {f.id: f.run_id for f in (await s.scalars(select(Finding).where(
+        Finding.id.in_([a.subject_id for a in rows if a.subject_type == "finding_review"])))).all()}
+    run_of = {a.id: a.subject_id if a.subject_type == "run_gate" else review_runs.get(a.subject_id) for a in rows}
+    runs_by_id = {r.id: r for r in (await s.scalars(select(Run).where(Run.id.in_([x for x in run_of.values() if x])))).all()}
+    if run:  # one run's approvals, by uuid or display id
+        rows = [a for a in rows if run_of.get(a.id) and (run_of[a.id] == run or getattr(runs_by_id.get(run_of[a.id]), "display_id", None) == run)]
     projects = {p.id: p for p in (await s.scalars(select(Project))).all()}
-    return {"items": [approval_json(a, runs_by_id.get(a.subject_id), projects.get(a.project_id)) for a in rows]}
+    return {"items": [approval_json(a, runs_by_id.get(run_of.get(a.id)), projects.get(a.project_id)) for a in rows]}
 
 
 class DecisionIn(BaseModel):
@@ -513,6 +518,15 @@ async def decide(aid: str, body: DecisionIn, request: Request, s: AsyncSession =
         await repairs.on_decision(s, a, body.approve)
     elif a.subject_type == "run_gate":  # the run is parked at a LangGraph interrupt; continue it from its checkpoint
         runs.dispatch("resume", a.subject_id, a.id, body.approve)
+    elif a.subject_type == "finding_review":  # a person settles what the rules could not
+        f = await s.get(Finding, a.subject_id)
+        if f is not None:
+            f.status = "confirmed" if body.approve else "dismissed"
+            f.board_column = "investigating" if body.approve else f.board_column
+            f.verdict = {**(f.verdict or {}), "status": f.status,
+                         "reason": f"{'confirmed' if body.approve else 'dismissed'} by {user.get('name') or user['sub']}"}
+            await s.commit()
+            await events.publish(f.project_id, "finding_updated", {"id": f.display_id, "status": f.status})
     return approval_json(a)
 
 
@@ -580,5 +594,13 @@ async def chat(body: ChatIn, s: AsyncSession = Depends(session)):
 
 
 # routers added in the core build (auth, plans, repairs, manifest, insights)
-for _r in (auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router, events.router, run_views.router, diagrams.router):
+# Playwright's trace viewer, from the installed package (same version that recorded the traces). Served by this API so
+# the viewer and /api/evidence/<trace> share one origin: the hosted trace.playwright.dev cannot read localhost evidence
+# (no CORS for it, and browsers block public sites from reading private-network addresses).
+_TRACE_VIEWER = Path(__import__("playwright").__file__).parent / "driver" / "package" / "lib" / "vite" / "traceViewer"
+if _TRACE_VIEWER.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/trace", StaticFiles(directory=_TRACE_VIEWER, html=True), name="trace-viewer")
+
+for _r in (report.router, auth.router, plans_ext.router, repairs.router, manifest.router, insights.router, integrations.router, events.router, run_views.router, diagrams.router):
     app.include_router(_r)

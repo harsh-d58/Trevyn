@@ -10,6 +10,8 @@ import { api, API_URL, type ApiEvent, type ApiRun, type Items } from "@/lib/api"
 import { useLive } from "@/lib/live"
 import { notify } from "@/lib/notify"
 import { cn } from "@/lib/utils"
+import { ReportButton } from "./report-button"
+import { RunApprovals } from "./run-approvals"
 import { GraphMap, LanesPanel, ScreenshotStrip, useRunGraph } from "./run-graph"
 
 const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "BLOCKED"])
@@ -157,6 +159,7 @@ export function RealRunView({ runId }: { runId: string }) {
     <PageHeader eyebrow="Live run · real execution" title={`${run?.id ?? runId} · ${run?.name ?? "Loading…"}`}>
       <Pill tone={conn === "open" ? "ok" : "mut"} dot pulse={conn === "open" && !!live}>{live ? conn : run ? "Finished" : conn}</Pill>
       {run && <Pill tone={live ? "brand" : run.status === "passed" ? "ok" : run.status === "failed" ? "bad" : "warn"}>{run.state}</Pill>}
+      {run && !live && <ReportButton runId={run.uuid} label={run.id} />}
       {live && <Button variant="glass" size="pill" onClick={() => api(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }).then(() => notify("Cancel requested", "warn")).catch((e: Error) => notify(e.message, "bad"))}>Stop run</Button>}
     </PageHeader>
     {error && <p role="alert" className="text-sm text-bad">{error}</p>}
@@ -197,6 +200,7 @@ export function RealRunView({ runId }: { runId: string }) {
           </dl>
           <p className="mt-3 text-xs text-muted-foreground">{run ? `${events.filter((e) => e.event_type === "verdict").length} of ${run.total} cases verified · ${run.duration}` : ""}</p>
         </Card>
+        <RunApprovals runId={runId} events={events} />
         <LanesPanel graph={graph} />
         <Card title="Findings from this run">
           {findings.length ? findings.map((f) => <Link key={f.seq} href={`/findings/${f.summary.split(":")[0]}`} className="block py-1.5 text-[13px] hover:underline">{f.summary}</Link>)

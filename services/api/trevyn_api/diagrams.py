@@ -13,7 +13,8 @@ from .run_views import _case_id, _json_evidence, _traffic, load_run_bundle
 
 router = APIRouter()
 NAMES = {"pipeline", "site-map", "coverage", "journey", "api", "service", "security",
-         "evidence", "root-cause", "regression", "repository"}
+         "evidence", "root-cause", "regression", "repository", "performance", "compatibility"}
+STATUS_KIND = {"passed": "det", "failed": "bad", "errored": "warn", "not run": "mut", "not applicable": "mut"}
 
 
 def _graph(columns: list[list[tuple[str, str, str, str]]], links: list[tuple[str, str]]) -> dict:
@@ -67,7 +68,8 @@ async def diagram(run_id: str, name: str, case: str | None = None, s: AsyncSessi
         for r in traffic:
             host = urlparse(str(r.get("url") or "")).hostname or "unknown"
             target = host if name == "service" else str(r.get("path") or "")
-            if name == "api" and not target.startswith("/api/"):
+            # the app's own data calls (XHR/fetch, any path); older runs without resourceType fall back to /api/*
+            if name == "api" and not (r.get("resourceType") in ("xhr", "fetch") if r.get("resourceType") else target.startswith("/api/")):
                 continue
             by_page[str(r.get("case") or "run")].add(target)
         left = [("case:" + c, c, "journey", "det") for c in by_page]
@@ -97,6 +99,34 @@ async def diagram(run_id: str, name: str, case: str | None = None, s: AsyncSessi
                   for f in b["findings"] for i, h in enumerate((f.diagnosis or {}).get("hypotheses", []))
                   for eid in h.get("supporting_evidence_ids", [])]
         return _graph([fs, hs, evidence], links)
+    if name == "performance":
+        # template: measured page -> each metric, coloured against Google's published "good" thresholds
+        from .run_views import perf
+        view = await perf(run_id, s)
+        rows = [("lighthouse", m["page"], m["metric"], m.get("value"), m.get("unit", "ms"), m.get("status"), m.get("budget"))
+                for m in view["lighthouse_metrics"]]
+        rows += [("browser", v["path"], v["metric"], v.get("value"), "" if v["metric"] == "CLS" else "ms", v.get("status"),
+                  v.get("budget")) for v in view["web_vitals"] if v.get("value") is not None]
+        pages = sorted({str(r[1]) for r in rows})
+        page_nodes = [("page:" + pg, urlparse(pg).path or pg, f"{sum(1 for r in rows if r[1] == pg and r[5] == 'failed')} over budget",
+                       "bad" if any(r[1] == pg and r[5] == "failed" for r in rows) else "det") for pg in pages]
+        metric_nodes = [(f"m:{src}:{pg}:{m}", f"{m} {round(val, 2) if isinstance(val, (int, float)) else '—'}{'' if unit in ('score', '') else ' ' + unit}",
+                         f"{src} · good ≤ {budget}" if budget is not None else src, STATUS_KIND.get(str(st), "mut"))
+                        for src, pg, m, val, unit, st, budget in rows]
+        return _graph([page_nodes, metric_nodes], [("page:" + str(r[1]), f"m:{r[0]}:{r[1]}:{r[2]}") for r in rows])
+    if name == "compatibility":
+        # template: a matrix, one row per test case and one column per browser, coloured by outcome
+        from .run_views import environment
+        matrix = (await environment(run_id, s))["matrix"]
+        cases_seen = list(dict.fromkeys(str(r.get("case")) for r in matrix))
+        browsers = list(dict.fromkeys(str(r.get("browser")) for r in matrix))
+        cell = {(str(r.get("case")), str(r.get("browser"))): r for r in matrix}
+        columns = [[("case:" + c, c, "test case", "acc") for c in cases_seen]]
+        for br in browsers:
+            columns.append([(f"cell:{c}:{br}", br, (cell.get((c, br)) or {}).get("status", "not run") + (
+                f" · {cell[(c, br)]['note'][:30]}" if cell.get((c, br), {}).get("note") else ""),
+                STATUS_KIND.get((cell.get((c, br)) or {}).get("status", "not run"), "mut")) for c in cases_seen])
+        return _graph(columns, [("case:" + c, f"cell:{c}:{br}") for c in cases_seen for br in browsers])
     if name == "regression":
         rows = b["regressions"]
         return _graph([[('before:' + r.id, r.test_case_id, r.baseline_outcome, "bad" if r.baseline_outcome == "failed" else "det") for r in rows],

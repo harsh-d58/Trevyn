@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -16,6 +17,7 @@ from trevyn_runner.runner import run_job
 
 from . import diagnose as dx
 from . import passive
+from .expectations import describe
 from . import zap
 from . import repo_scan
 from . import lighthouse
@@ -191,33 +193,38 @@ async def compat_lane(ctx: RunCtx, cases: list[TestCase], target: Target) -> Non
     total = len(safe) * len(variants)
     await lane(ctx, "compat", 0, total)
     rows = []
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + int(os.getenv("COMPAT_MAX_SECONDS", "300"))
     for tc in cases:
         for label, browser, viewport, mobile in variants:
             if tc not in safe:
                 rows.append({"case": tc.test_case_id, "browser": label, "status": "not run", "note": "side effects or risk"})
     completed = 0
-    for tc in safe:
-        for label, browser, viewport, mobile in variants:
-            if ctx.cancelled() or deadline - time.monotonic() < 2:
-                rows.append({"case": tc.test_case_id, "browser": label, "status": "not run", "note": "lane time limit"})
-                continue
-            job = RunnerJob(job_id=str(uuid.uuid4()), run_id=ctx.run_id, target=target, test_cases=[tc],
-                            browser=browser, viewport=viewport, mobile=mobile,
-                            out_dir=f"{ctx.evidence_dir}/{ctx.run_id}/compat/{label.replace(' ', '-')}/{tc.test_case_id}")
-            try:
-                result = await asyncio.wait_for(run_job(job), timeout=min(40, max(2, deadline - time.monotonic())))
-                case = result.cases[0] if result.status == "completed" and result.cases else None
-                status = ("not run" if case is None else case.outcome if case.outcome in ("passed", "failed", "errored")
-                          else "not run")
-                step_error = next((s.error for s in case.steps if s.error), "") if case else ""
-                note = ("browser unavailable" if case is None else
-                        f"step error: {step_error}"[:160] if status == "errored" else "")
-            except Exception as exc:
-                status, note = "not run", type(exc).__name__
-            rows.append({"case": tc.test_case_id, "browser": label, "status": status, "note": note})
+
+    async def one(tc: TestCase, label: str, browser: str, viewport: dict | None, mobile: bool) -> dict:
+        if ctx.cancelled() or deadline - time.monotonic() < 2:
+            return {"case": tc.test_case_id, "browser": label, "status": "not run", "note": "lane time limit"}
+        job = RunnerJob(job_id=str(uuid.uuid4()), run_id=ctx.run_id, target=target, test_cases=[tc],
+                        browser=browser, viewport=viewport, mobile=mobile,
+                        out_dir=f"{ctx.evidence_dir}/{ctx.run_id}/compat/{label.replace(' ', '-')}/{tc.test_case_id}")
+        try:
+            result = await asyncio.wait_for(run_job(job), timeout=min(90, max(2, deadline - time.monotonic())))
+            case = result.cases[0] if result.status == "completed" and result.cases else None
+            status = ("not run" if case is None else case.outcome if case.outcome in ("passed", "failed", "errored")
+                      else "not run")
+            step_error = next((s.error for s in case.steps if s.error), "") if case else ""
+            note = ("browser unavailable" if case is None else
+                    f"step error: {step_error}"[:160] if status == "errored" else "")
+        except TimeoutError:
+            status, note = "not run", "case exceeded 90 s in this browser"
+        except Exception as exc:
+            status, note = "not run", type(exc).__name__
+        return {"case": tc.test_case_id, "browser": label, "status": status, "note": note}
+
+    for tc in safe:  # the three browsers run side by side; cases go one after another
+        for row in await asyncio.gather(*(one(tc, *variant) for variant in variants)):
+            rows.append(row)
             completed += 1
-            await lane(ctx, "compat", completed, total, "running")
+        await lane(ctx, "compat", completed, total, "running")
     report = Path(ctx.evidence_dir) / ctx.run_id / "compat" / "matrix.json"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps({"rows": parse_matrix({"rows": rows})}, indent=1), encoding="utf-8")
@@ -386,12 +393,13 @@ async def record_issues(ctx: RunCtx, issues: list[passive.Issue]) -> int:
         path = out_dir / f"{re.sub(r'[^A-Za-z0-9_-]', '_', i.rule)[:70]}-{index}.json"
         path.write_text(json.dumps({"rule": i.rule, "message": i.message, **i.evidence}, indent=1, default=str))
         eid = await ctx.add_evidence("passive_check", str(path), case_id)
+        expected, actual = describe(i)  # the rule's requirement vs what was observed, never one message twice
         tc = TestCase(test_case_id=case_id, title=i.title, requirement_ref=source,
-                      steps=[{"action": "goto", "target": i.path or "/"}], expected_result=i.message,
+                      steps=[{"action": "goto", "target": i.path or "/"}], expected_result=expected,
                       assertions=[{"kind": "status", "subject": i.path or "/", "op": "lte", "expected": 399}], risk="low")
         verdict = Verdict(status="confirmed", rule=i.rule if i.rule.startswith(("zap:", "axe:", "osv:", "gitleaks:", "lighthouse:", "web-vitals:")) else f"passive:{i.rule}",
                           reproduced="deterministic",
-                          checks={"V4": True, "V7": True}, explanation=i.message, explanation_by="rules")
+                          checks={"V4": True, "V7": True}, explanation=actual, explanation_by="rules")
         cited = [eid, *i.evidence_ids]
         fid = await ctx.add_finding(tc, CaseResult(test_case_id=case_id, outcome="failed"), verdict, None, cited, None,
                                     category=i.category, severity=i.severity)

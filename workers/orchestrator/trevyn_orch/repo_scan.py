@@ -186,15 +186,40 @@ async def scan(url: str, sha: str, out_dir: Path) -> tuple[list[tuple[Path, list
         for args in ([git, "init", "-q"],
                      [git, "-c", "protocol.version=2", "fetch", "--no-tags", "--depth=1", url, sha],
                      [git, "-c", "core.symlinks=false", "checkout", "-q", "--detach", "FETCH_HEAD"]):
-            code, _ = await _command(args, checkout, env, min(35, deadline - time.monotonic()))
+            try:
+                code, _ = await _command(args, checkout, env, min(90, max(1, deadline - time.monotonic())))
+            except TimeoutError:
+                return [], "Pinned GitHub checkout timed out (slow network or very large repository)"
             if code:
                 return [], "Pinned GitHub checkout failed"
         code, head = await _command([git, "rev-parse", "HEAD"], checkout, env, 3)
         if code or head.decode(errors="replace").strip() != sha:
             return [], "Checkout SHA did not match the plan"
+        # Gitleaks first: local and quick. OSV queries osv.dev over the network and gets the remaining time.
+        if gitleaks and deadline - time.monotonic() > 2:
+            try:
+                code, output = await _command([gitleaks, "dir", str(checkout), "--report-format=json",
+                                               "--report-path=-", "--redact", "--no-banner", "--no-color"],
+                                              checkout, env, min(60, max(1, deadline - time.monotonic())))
+                if code in (0, 1):
+                    issues, safe = parse_gitleaks(json.loads(output or b"[]"), checkout)
+                    report = out_dir / "gitleaks-redacted.json"
+                    report.write_text(json.dumps(safe), encoding="utf-8")
+                    reports.append((report, issues))
+                    notes.append(f"Gitleaks: {len(issues)} possible secrets")
+                else:
+                    notes.append("Gitleaks failed")
+            except TimeoutError:
+                notes.append("Gitleaks timed out after 60 s")
+            except (ValueError, TypeError):
+                notes.append("Gitleaks output unreadable")
+            except OSError as exc:
+                notes.append(f"Gitleaks could not start ({type(exc).__name__})")
+        elif not gitleaks:
+            notes.append("Gitleaks not installed")
         if osv:
             try:
-                osv_budget = max(5.0, deadline - time.monotonic() - 20)  # keep 20 s for Gitleaks
+                osv_budget = max(5.0, deadline - time.monotonic())  # Gitleaks already ran
                 code, output = await _command([osv, "scan", "source", "--recursive", "--format=json", str(checkout)],
                                               checkout, env, osv_budget)
                 if code in (0, 1):
@@ -214,23 +239,6 @@ async def scan(url: str, sha: str, out_dir: Path) -> tuple[list[tuple[Path, list
                 notes.append(f"OSV could not start ({type(exc).__name__})")
         else:
             notes.append("OSV-Scanner not installed")
-        if gitleaks and deadline - time.monotonic() > 2:
-            try:
-                code, output = await _command([gitleaks, "dir", str(checkout), "--report-format=json",
-                                               "--report-path=-", "--redact", "--no-banner", "--no-color"],
-                                              checkout, env, min(55, deadline - time.monotonic()))
-                if code in (0, 1):
-                    issues, safe = parse_gitleaks(json.loads(output or b"[]"), checkout)
-                    report = out_dir / "gitleaks-redacted.json"
-                    report.write_text(json.dumps(safe), encoding="utf-8")
-                    reports.append((report, issues))
-                    notes.append(f"Gitleaks: {len(issues)} possible secrets")
-                else:
-                    notes.append("Gitleaks failed")
-            except (OSError, TimeoutError, ValueError, TypeError):
-                notes.append("Gitleaks unavailable")
-        elif not gitleaks:
-            notes.append("Gitleaks not installed")
     finally:
         await _remove_tree(Path(root))  # a cleanup problem must never discard finished scan results
     return reports, "; ".join(notes)

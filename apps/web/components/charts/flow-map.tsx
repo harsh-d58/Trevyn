@@ -129,13 +129,24 @@ function Canvas({ nodes, edges, w = 900, h = 380, dark, pastel, sel, onSelect, n
   )
 }
 
+/** The box is sized from where the nodes really are, not the declared w × h: a generated diagram with more rows than
+ * its declared height used to draw outside its card, and one placed off-centre left a blank half. */
+function fitToNodes(nodes: FlowNodeData[], nw: number, nh: number, w: number, h: number) {
+  if (!nodes.length) return { nodes, w, h }
+  const pad = 28, label = 14 // room for edge labels above the top row
+  const minX = Math.min(...nodes.map((n) => n.x)) - nw / 2 - pad, maxX = Math.max(...nodes.map((n) => n.x)) + nw / 2 + pad
+  const minY = Math.min(...nodes.map((n) => n.y)) - nh / 2 - pad - label, maxY = Math.max(...nodes.map((n) => n.y)) + nh / 2 + pad
+  return { nodes: nodes.map((n) => ({ ...n, x: n.x - minX, y: n.y - minY })), w: maxX - minX, h: maxY - minY }
+}
+
 export function FlowMap(props: Props) {
-  const { w = 900, h = 380, minW = 760, maxZoom = 1 } = props
+  const { w = 900, h = 380, minW = 760, maxZoom = 1, nw = 156, nh = 48 } = props
+  const fitted = useMemo(() => fitToNodes(props.nodes, nw, nh, w, h), [props.nodes, nw, nh, w, h])
   return (
     <div className="overflow-x-auto">
       {/* explicit width keeps aspect-ratio from shrinking it; max-height caps the scale (text stays page-sized) */}
-      <div style={{ minWidth: minW, width: "100%", aspectRatio: `${w} / ${h}`, maxHeight: h * maxZoom }}>
-        <ReactFlowProvider><Canvas {...props} /></ReactFlowProvider>
+      <div style={{ minWidth: Math.min(minW, fitted.w), width: "100%", aspectRatio: `${fitted.w} / ${fitted.h}`, maxHeight: fitted.h * maxZoom }}>
+        <ReactFlowProvider><Canvas {...props} nodes={fitted.nodes} w={fitted.w} h={fitted.h} /></ReactFlowProvider>
       </div>
     </div>
   )

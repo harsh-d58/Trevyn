@@ -19,6 +19,7 @@ const TITLES: Record<string, string> = {
 const DIAGRAMS: Record<string, string[]> = {
   planner: ["site-map", "coverage", "repository"], ui: ["coverage", "journey"],
   "api-calls": ["api"], security: ["security"], repairs: ["root-cause"], regression: ["regression"],
+  perf: ["performance"], environment: ["compatibility"],
 }
 const label = (s: string) => s.replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (c) => c.toUpperCase())
 
@@ -119,8 +120,8 @@ export async function LiveRunResult({ kind }: { kind: keyof typeof TITLES }) {
     <PageHeader eyebrow="Live run" title={title} sub={`${data.run.display_id} · ${data.run.name} · ${data.run.state}`} />
     {data.reason ? <p className="text-[12px] text-muted-foreground">{String(data.reason)}</p> : null}
     {graphs.map((graph, i) => graph?.nodes.length ? <Card key={i} title={`${label(DIAGRAMS[kind][i])} · ${data.run.display_id}`}>
-      {/* natural height up to 600 px, then it scrolls inside the card: big graphs must never draw over the sections below */}
-      <div className="max-h-[600px] overflow-auto"><FlowMap nodes={graph.nodes} edges={graph.edges} w={graph.w} h={graph.h} label={label(DIAGRAMS[kind][i])} /></div>
+      {/* the card grows with the diagram: FlowMap sizes itself from where its nodes actually are */}
+      <div><FlowMap nodes={graph.nodes} edges={graph.edges} w={graph.w} h={graph.h} label={label(DIAGRAMS[kind][i])} /></div>
     </Card> : null)}
     <Highlights kind={kind} data={data} />
     {sections.map(([key, value]) => <Section key={key} name={key} value={value} />)}

@@ -20,7 +20,7 @@ export function RealFindingView({ f, journey }: { f: ApiFindingDetail; journey?:
     <div className="grid gap-4">
       <PageHeader eyebrow={`${f.id} · ${f.test_case_id} · ${f.runId}`} title={f.title}><Severity s={f.severity} /><Pill tone={STATUS_TONE[f.status as keyof typeof STATUS_TONE] ?? "mut"}>{f.status}</Pill>
           <Link href={`/runs/live?run=${f.runUuid}`}><Pill tone="brand">Open run</Pill></Link></PageHeader>
-      {journey?.nodes.length ? <Card title={`Journey · ${f.test_case_id}`}><div className="h-[320px]"><FlowMap nodes={journey.nodes} edges={journey.edges} w={journey.w} h={journey.h} label="Test journey" /></div></Card> : null}
+      {journey?.nodes.length ? <Card title={`Journey · ${f.test_case_id}`}><div><FlowMap nodes={journey.nodes} edges={journey.edges} w={journey.w} h={journey.h} label="Test journey" /></div></Card> : null}
       <div className="grid gap-4 xl:grid-cols-[1fr_1.4fr]">
         <div className="grid content-start gap-4">
           <Card title="Expected vs actual">
@@ -55,7 +55,7 @@ export function RealFindingView({ f, journey }: { f: ApiFindingDetail; journey?:
             <div className="mt-3 flex flex-wrap gap-1.5">
               {files.map((e) => <a key={e.id} href={`${API_URL}${e.url}`} target="_blank" rel="noreferrer"><Pill tone="det">{e.kind} · {Math.ceil(e.bytes / 1024)} KB</Pill></a>)}
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">Open a trace at trace.playwright.dev after downloading it.</p>
+            <p className="mt-2 text-xs text-muted-foreground">Traces open in the Playwright trace viewer served by the Trevyn API.</p>
           </Card>
           {f.repair_prompt && (
             <Card title="Repair prompt" caption="Paste into your coding tool">

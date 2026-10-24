@@ -103,9 +103,9 @@ async def run_baseline(url: str, out_dir: Path, allowed_hosts: set[str]) -> tupl
                 "-J", report.name, "-I"]
         try:
             proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL,
-                                                        stderr=asyncio.subprocess.DEVNULL, env=env)
+                                                        stderr=asyncio.subprocess.PIPE, env=env)
             try:
-                await asyncio.wait_for(proc.wait(), timeout=MAX_SECONDS)
+                _, err = await asyncio.wait_for(proc.communicate(), timeout=MAX_SECONDS)
             except TimeoutError:
                 proc.kill()
                 await proc.wait()
@@ -121,6 +121,11 @@ async def run_baseline(url: str, out_dir: Path, allowed_hosts: set[str]) -> tupl
         except OSError:
             return None, [], "Docker could not start ZAP"
     if not report.is_file():
+        reason = (err or b"").decode(errors="replace").lower()
+        if "daemon" in reason or "unable to start" in reason or "docker_engine" in reason:
+            return None, [], "Docker engine is not running (start Docker Desktop); built-in P1-P9 checks remain active"
+        if "no such image" in reason or "unable to find image" in reason:
+            return None, [], f"ZAP image missing: run `docker pull {os.getenv('ZAP_IMAGE', ZAP_IMAGE)}`"
         return None, [], "ZAP did not produce a JSON report"
     try:
         data = sanitize_report(json.loads(report.read_text(encoding="utf-8")))

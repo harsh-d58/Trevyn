@@ -45,6 +45,14 @@ def sanitize_report(data: dict) -> dict:
             "categories": {"performance": {"score": perf.get("score")}}, "audits": audits}
 
 
+def _band(score: object) -> str:
+    """Lighthouse's own colour bands for metrics without a Core Web Vitals budget: >= 0.9 good, 0.5-0.9 needs
+    improvement, < 0.5 poor."""
+    if not isinstance(score, (int, float)):
+        return "not applicable"
+    return "passed" if score >= 0.9 else "needs improvement" if score >= 0.5 else "failed"
+
+
 def parse_report(data: dict, page: str) -> tuple[dict, list[Issue]]:
     """Single-run lab metrics. Only LCP and CLS use published Core Web Vitals thresholds."""
     category = (data.get("categories") or {}).get("performance") or {}
@@ -58,7 +66,7 @@ def parse_report(data: dict, page: str) -> tuple[dict, list[Issue]]:
         status = "not run" if not isinstance(value, (int, float)) else \
             "failed" if name in BUDGETS and value > BUDGETS[name] else \
             "passed" if name in BUDGETS else \
-            "passed" if audit.get("score") == 1 else "failed" if isinstance(audit.get("score"), (int, float)) else "not applicable"
+            _band(audit.get("score"))
         metrics[name] = {"value": round(value, 2) if isinstance(value, (int, float)) else None,
                          "unit": "score" if name == "CLS" else "ms", "status": status,
                          "budget": BUDGETS.get(name)}
@@ -125,7 +133,7 @@ async def scan(base_url: str, paths: list[str], allowed_hosts: set[str], out_dir
     # through a dead proxy, except allowlisted hosts, blocks those too; <-loopback> removes Chrome's implicit
     # localhost bypass so only an allowlisted localhost is reachable.
     bypass = ";".join(["<-loopback>", *sorted(allowed_hosts)])
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + int(os.getenv("LIGHTHOUSE_MAX_SECONDS", "240"))
     reports = []
     async with async_playwright() as pw:
         browser = None
@@ -166,7 +174,7 @@ async def scan(base_url: str, paths: list[str], allowed_hosts: set[str], out_dir
                 proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.DEVNULL,
                                                             stderr=asyncio.subprocess.DEVNULL)
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=min(35, deadline - time.monotonic()))
+                    await asyncio.wait_for(proc.wait(), timeout=min(60, deadline - time.monotonic()))  # heavy SPAs need ~40 s
                 except TimeoutError:
                     proc.kill()
                     await proc.wait()

@@ -28,7 +28,7 @@ function Ring({ p }: { p: number }) {
   )
 }
 
-function Compact({ flash, run, muted, now }: { flash: Flash | null; run: LiveState["run"]; muted: boolean; now: number | null }) {
+function Compact({ flash, run, muted, now, activity }: { flash: Flash | null; run: LiveState["run"]; muted: boolean; now: number | null; activity: LiveState["activity"] }) {
   if (flash) {
     const dot = { finding: "bg-[#ff6b6b]", approval: "bg-[#ffb547]", thinking: "bg-[#b9a8ff]", done: "", info: "bg-[#45dcc6]" }[flash.kind]
     return (
@@ -54,6 +54,7 @@ function Compact({ flash, run, muted, now }: { flash: Flash | null; run: LiveSta
         <Ring p={run.total ? run.done / run.total : 0} />
         <span className="font-mono text-[11.5px] text-white/70">{run.id}</span>
         <span className="font-semibold tabular">{run.done}/{run.total}</span>
+        {activity && <span className="min-w-0 flex-1 truncate text-[11.5px] text-white/75" title={activity.text}>{activity.text}</span>}
         <span className="ml-auto font-mono text-[11.5px] text-white/60 tabular">{now && run.startedAt ? clock(now - run.startedAt) : "–:––"}</span>
         {!run.uuid && <Demo />}
         {muted && <Moon size={13} className="text-white/60" />}
@@ -73,6 +74,7 @@ export function Island() {
   const store = useLiveStore()
   const flash = useLive((s) => s.flash)
   const run = useLive((s) => s.run)
+  const activity = useLive((s) => (s.activity && s.activity.uuid === s.run?.uuid ? s.activity : null))
   const muted = useLive((s) => s.muted)
   const events = useLive((s) => s.events)
   const [open, setOpen] = useState(false)
@@ -91,7 +93,8 @@ export function Island() {
 
   const view: View = open ? { key: "panel", width: 420 }
     : flash ? { key: `flash-${flash.kind}-${flash.text}`, width: flash.kind === "finding" ? 320 : flash.kind === "done" ? 300 : 320 }
-    : live && run ? { key: `run-${run.state}`, width: run.state === "gate" ? 300 : 300 } : { key: "idle", width: 240 }
+    // a live run with an activity line needs room to read it
+    : live && run ? { key: `run-${run.state}`, width: run.state === "gate" ? 300 : activity ? 460 : 300 } : { key: "idle", width: 240 }
 
   return (
     <div ref={ref} className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 md:top-3 md:bottom-auto">
@@ -143,7 +146,7 @@ export function Island() {
               <div className="flex h-9.5 items-center pr-1.5">
                 <button onClick={() => setOpen(true)} aria-expanded={open} aria-label="Live activity"
                   className="pulse pulse-on-dark flex h-full min-w-0 flex-1 items-center gap-2 pl-3.5 pr-2 text-left text-[12.5px]">
-                  <Compact flash={flash} run={run} muted={muted} now={now} />
+                  <Compact flash={flash} run={run} muted={muted} now={now} activity={activity} />
                 </button>
                 {flash?.href && (
                   <Link href={flash.href} className="press pulse pulse-on-dark shrink-0 rounded-full bg-white/12 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/20">
