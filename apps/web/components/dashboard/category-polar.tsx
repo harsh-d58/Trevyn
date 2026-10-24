@@ -9,6 +9,7 @@ import { useEffect, useState } from "react"
 import type { CategorySlice, FindingType } from "@/lib/types"
 import { Card } from "./bits"
 import { cn } from "@/lib/utils"
+import { CircleCheck } from "lucide-react"
 
 const COLOR: Record<FindingType, string> = { ui: "var(--cat-ui)", api: "var(--cat-api)", perf: "var(--cat-perf)", security: "var(--cat-sec)", compat: "var(--cat-compat)" }
 const C = 90, R_MIN = 26, R_MAX = 84
@@ -35,16 +36,16 @@ function Wedge({ slice, i, n, r, active, dim, onHover, onClick }: {
   )
 }
 
-export function CategoryPolar({ data }: { data: CategorySlice[] }) {
+export function CategoryPolar({ data, live = false }: { data: CategorySlice[]; live?: boolean }) {
   const router = useRouter()
   const [hover, setHover] = useState<FindingType | null>(null)
   const total = data.reduce((a, s) => a + s.count, 0)
-  const max = Math.max(...data.map((s) => s.count))
+  const max = Math.max(1, ...data.map((s) => s.count))
   const radius = (c: number) => R_MIN + (c / max) * (R_MAX - R_MIN)
 
   return (
-    <Card title="Findings by category" caption={`${total} findings in the last 30 days · radius = count`} className="h-full">
-      <div className="flex flex-1 flex-col items-center gap-4 sm:flex-row">
+    <Card title="Findings by category" caption={`${total} ${live ? "findings" : "sample findings"}`} className="overview-categories h-full">
+      {!total ? <div className="flex min-h-[180px] flex-col items-center justify-center text-center"><span className="overview-empty-icon"><CircleCheck size={21} /></span><p className="mt-3 text-[13px] font-semibold">No findings</p><Link href="/findings" className="overview-text-link mt-4">View findings →</Link></div> : <div className="flex flex-1 flex-col items-center gap-4 sm:flex-row xl:flex-col 2xl:flex-row">
         <svg viewBox="0 0 180 180" className="size-[180px] shrink-0 overflow-visible" role="img" aria-label="Findings by category">
           <defs>
             {data.map((s) => (
@@ -78,7 +79,7 @@ export function CategoryPolar({ data }: { data: CategorySlice[] }) {
             </li>
           ))}
         </ul>
-      </div>
+      </div>}
     </Card>
   )
 }

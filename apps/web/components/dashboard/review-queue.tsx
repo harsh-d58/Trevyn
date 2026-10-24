@@ -89,14 +89,14 @@ export function ReviewQueue() {
   }
 
   return (
-    <Card title="Review queue" caption="Approvals and uncertain findings waiting for you" className="h-full"
+    <Card title="Approvals" className="h-full"
       extra={<Link href="/approvals" className="shrink-0 text-[12px] font-medium text-brand hover:underline">All approvals</Link>}>
       <LayoutGroup>
         <ul className="-mx-2 grid content-start">
           <AnimatePresence initial={false}>
             {pending.map((a) => <Row key={a.id} a={a} onApprove={approve} />)}
           </AnimatePresence>
-          {pending.length === 0 && <li className="px-2 py-6 text-center text-[12.5px] text-muted-foreground">Queue clear. Nice work.</li>}
+          {pending.length === 0 && <li className="px-2 py-6 text-center text-[12.5px] text-muted-foreground">No pending approvals</li>}
         </ul>
         {done.length > 0 && (
           <>
