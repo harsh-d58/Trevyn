@@ -24,7 +24,7 @@ from langgraph.types import Command
 from trevyn_orch import graph as rg
 from trevyn_orch.pipeline import TERMINAL, check
 
-from .db import (Approval, AuditLog, Environment, Evidence, Finding, ModelCall, Plan, Project, Run, RunEvent, Session, SiteMapRecord, now, uid)
+from .db import (Approval, AuditLog, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run, RunEvent, Session, SiteMapRecord, now, uid)
 
 log = logging.getLogger("trevyn.runs")
 EVIDENCE_DIR = Path(os.getenv("EVIDENCE_DIR", "var/evidence"))
@@ -269,12 +269,15 @@ async def _load(run_id: str) -> tuple[Run, rg.Deps]:
         target = Target(base_url=env.base_url, allowed_hosts=proj.allowed_domains, hook_url=env.hook_url if env.local_runner else None,
                         hook_token=os.getenv("TREVYN_HOOK_TOKEN") or None)
         site = await s.get(SiteMapRecord, plan.site_map_id) if getattr(plan, "site_map_id", None) else None
+        decision = await s.scalar(select(PolicyDecision).where(PolicyDecision.subject_id == run.id,
+                                                               PolicyDecision.action == "run.start"))
     paths = [p.get("path", "/") for p in ((site.content or {}).get("pages", []) if site else [])]
     repo_files = (getattr(plan, "repository_map", None) or {}).get("file_count", 0)
     return run, rg.Deps(ctx=Ctx(run), cases=[TestCase.model_validate(tc) for tc in plan.test_cases], target=target,
                         mode=plan.test_mode or "black_box", site_paths=paths, repo_files=repo_files,
                         repo_url=proj.repository_url if plan.test_mode == "gray_box" else None,
-                        repo_sha=plan.repository_sha if plan.test_mode == "gray_box" else None)
+                        repo_sha=plan.repository_sha if plan.test_mode == "gray_box" else None,
+                        approval_obligations=decision.obligations if decision else [])
 
 
 async def _invoke(run_id: str, deps: rg.Deps, payload) -> None:

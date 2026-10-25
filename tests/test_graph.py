@@ -100,6 +100,21 @@ async def test_high_risk_case_interrupts_and_holds_nothing(tmp_path, ran):
     assert any(k == "gate" and "waiting for approval" in s for k, s in ctx.events)
 
 
+async def test_production_side_effects_require_approval_even_when_risk_is_low(tmp_path, ran):
+    ctx = FakeCtx("production-side-effect")
+    write = case("TC-WRITE")
+    write.side_effects = ["creates_order"]
+    deps = rg.Deps(ctx=ctx, cases=[write], target=TARGET,
+                   approval_obligations=["requires_approval:production"])
+    async with rg.checkpointer("", str(tmp_path / "lg.db")) as saver:
+        graph = rg.build(saver)
+        out = await graph.ainvoke({"run_id": ctx.run_id, "case_ids": [write.test_case_id]},
+                                  rg.thread(ctx.run_id), context=deps)
+        assert rg.interrupted(out)
+        assert out["__interrupt__"][0].value["case_id"] == "TC-WRITE"
+    assert ctx.cur == "AWAITING_APPROVAL" and ran == []
+
+
 async def test_resume_approve_runs_the_case(tmp_path, ran):
     ctx = FakeCtx("r2")
     async with rg.checkpointer("", str(tmp_path / "lg.db")) as saver:

@@ -122,6 +122,12 @@ def test_public_target_and_bad_urls(monkeypatch):
     assert targets.check_url("http://localhost:3100") is None
 
 
+def test_ipv4_mapped_internal_address_is_blocked(monkeypatch):
+    monkeypatch.delenv("ALLOW_PRIVATE_TARGETS", raising=False)
+    assert "private" in targets.check_url("https://app.example", resolve=fake("::ffff:127.0.0.1"))
+    assert targets.check_url("https://user:pass@app.example", resolve=fake("93.184.216.34"))
+
+
 # ---- auth ----
 def test_role_rules():
     assert auth.required("GET", "/api/runs") == ("viewer", False)

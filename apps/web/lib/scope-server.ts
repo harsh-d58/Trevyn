@@ -1,6 +1,7 @@
 import { cookies } from "next/headers"
 import { PROJECT_COOKIE, SCOPE_COOKIE } from "./scope"
-import { tryApi, type Items, type ApiRun } from "./api"
+import { type Items, type ApiRun } from "./api"
+import { tryServerApi as tryApi } from "./api-server"
 
 /** The run every page is scoped to, or null for all runs. Dynamic: call it only inside a Suspense boundary. */
 export async function scopedRun(): Promise<string | null> {
@@ -22,5 +23,8 @@ export async function scopedProject(): Promise<string | null> {
   const run = jar.get(SCOPE_COOKIE)?.value
   if (run) return (await tryApi<ApiRun>(`/api/runs/${encodeURIComponent(run)}`))?.project_id ?? null
   const latest = await tryApi<Items<ApiRun>>("/api/runs?limit=1")
-  return latest?.items[0]?.project_id ?? null
+  if (latest?.items[0]?.project_id) return latest.items[0].project_id
+  // A connected project can exist before its first run. Keep its quality pages scoped to it.
+  const projects = await tryApi<Items<{ id: string }>>("/api/projects")
+  return projects?.items.at(-1)?.id ?? null
 }

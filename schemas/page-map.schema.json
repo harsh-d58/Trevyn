@@ -36,6 +36,14 @@
       "title": "Buttons",
       "type": "array"
     },
+    "hidden_buttons": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Hidden Buttons",
+      "type": "array"
+    },
     "fields": {
       "default": [],
       "items": {

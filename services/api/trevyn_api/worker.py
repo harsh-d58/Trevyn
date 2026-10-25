@@ -9,6 +9,9 @@ import os
 from celery import Celery
 
 from . import main as _env  # noqa: F401  (loads .env before settings are read)
+from .deployment import require_public_config
+
+require_public_config()
 
 app = Celery("trevyn", broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 app.conf.update(

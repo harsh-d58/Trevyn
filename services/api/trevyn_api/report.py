@@ -215,8 +215,14 @@ async def report_pdf(run_id: str, refresh: bool = False, s: AsyncSession = Depen
     out_dir = runs.EVIDENCE_DIR / run.id / "report"
     pdf = out_dir / f"trevyn-report-{run.display_id}.pdf"
     cached = await s.scalar(select(Evidence).where(Evidence.run_id == run.id, Evidence.kind == "report_pdf"))
-    if cached and pdf.is_file() and not refresh:
-        return FileResponse(pdf, media_type="application/pdf", filename=pdf.name)
+    if cached and not refresh:
+        if cached.uri.startswith("s3://"):
+            from . import storage
+            from fastapi.responses import RedirectResponse
+            if url := storage.presign(cached.uri):
+                return RedirectResponse(url, status_code=307)
+        if pdf.is_file():
+            return FileResponse(pdf, media_type="application/pdf", filename=pdf.name)
     facts = await collect(s, run.id)
     story, source = await narrative(facts, run.id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -225,6 +231,18 @@ async def report_pdf(run_id: str, refresh: bool = False, s: AsyncSession = Depen
         generated=datetime.now(UTC).strftime("%d %b %Y, %H:%M UTC"))
     (out_dir / "report.html").write_text(html, encoding="utf-8")
     await render_pdf(html, pdf)
-    if not cached:
-        await runs.Ctx(run).add_evidence("report_pdf", str(pdf), "REPORT")
+    from . import storage
+    if cached:
+        cached.uri, cached.sha256, cached.bytes = await storage.store_evidence(
+            run.id, run.project_id, "REPORT", "report_pdf", pdf)
+        await s.commit()
+        saved = cached
+    else:
+        evidence_id = await runs.Ctx(run).add_evidence("report_pdf", str(pdf), "REPORT")
+        saved = await s.get(Evidence, evidence_id)
+    if saved and saved.uri.startswith("s3://"):
+        from fastapi.responses import RedirectResponse
+        if url := storage.presign(saved.uri):
+            return RedirectResponse(url, status_code=307)
+        raise Problem(503, "integration_unavailable", "Report storage is not configured")
     return FileResponse(pdf, media_type="application/pdf", filename=pdf.name)

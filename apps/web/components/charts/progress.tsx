@@ -16,16 +16,16 @@ export function Stepper({ steps, step, onStep }: { steps: string[]; step: number
             <li key={s} className="relative flex-1">
               {i > 0 && (
                 <span className="absolute top-[13px] right-1/2 -left-1/2 h-[3px] overflow-hidden rounded-full bg-black/5">
-                  <motion.i className={cn("block h-full", on ? "bg-brand" : "bg-ok")} initial={false} animate={{ width: i <= step ? "100%" : "0%" }} transition={{ duration: 0.45 }} />
+                  <motion.i className="block h-full bg-brand" initial={false} animate={{ width: i <= step ? "100%" : "0%" }} transition={{ duration: 0.45 }} />
                 </span>
               )}
               <button onClick={() => onStep(i)} aria-current={on ? "step" : undefined} className="press relative z-10 flex w-full flex-col items-center gap-1.5">
                 <span className={cn("grid size-[29px] place-items-center rounded-full border-2 font-mono text-[11px] font-semibold transition",
-                  done ? "border-ok bg-ok text-white" : on ? "border-brand bg-white text-brand ring-4 ring-brand/15" : "border-border bg-white/70 text-muted-foreground")}>
-                  {done ? <Check size={14} strokeWidth={3} /> : String(i + 1).padStart(2, "0")}
+                  done ? "border-brand/40 bg-brand/10 text-brand" : on ? "border-brand bg-white text-brand ring-4 ring-brand/15" : "border-border bg-white/70 text-muted-foreground")}>
+                  {String(i + 1).padStart(2, "0")}
                 </span>
                 <span className={cn("text-[12.5px] whitespace-nowrap", on ? "font-semibold text-foreground" : done ? "text-foreground/80" : "text-muted-foreground")}>{s}</span>
-                <span className={cn("font-mono text-[9.5px] tracking-[.14em] uppercase", on ? "text-brand" : done ? "text-ok" : "text-muted-foreground/70")}>{done ? "Done" : on ? "Editing" : "Pending"}</span>
+                <span className={cn("font-mono text-[9.5px] tracking-[.14em] uppercase", on ? "text-brand" : done ? "text-brand" : "text-muted-foreground/70")}>{done ? "Visited" : on ? "Editing" : "Pending"}</span>
               </button>
             </li>
           )

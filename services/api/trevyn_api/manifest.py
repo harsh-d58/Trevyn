@@ -78,6 +78,10 @@ async def verify_manifest(run_id: str, body: dict):
     async with Session() as s:
         run = await get_or_404(s, Run, run_id)
     manifest = body.get("manifest") or {}
-    valid = verify_signature(manifest, body.get("signature", ""), body.get("public_key", ""))
+    # A caller can sign the database's unchanged manifest with their own key. Only
+    # the server's configured signing key proves that Trevyn signed these bytes.
+    trusted_key = _pub(_key())
+    valid = body.get("public_key") == trusted_key and verify_signature(
+        manifest, body.get("signature", ""), trusted_key)
     matches = manifest == await build(run)
     return {"signature_valid": valid, "matches_database": matches, "integrity_verified": valid and matches}

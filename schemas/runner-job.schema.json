@@ -282,6 +282,26 @@
       "title": "Headless",
       "type": "boolean"
     },
+    "viewport": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Viewport"
+    },
+    "mobile": {
+      "default": false,
+      "title": "Mobile",
+      "type": "boolean"
+    },
     "out_dir": {
       "title": "Out Dir",
       "type": "string"

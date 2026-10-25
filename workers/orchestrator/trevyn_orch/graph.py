@@ -82,6 +82,7 @@ class Deps:
     repo_files: int = 0
     repo_url: str | None = None
     repo_sha: str | None = None
+    approval_obligations: list[str] = field(default_factory=list)
     results: list[tuple[TestCase, CaseResult]] = field(default_factory=list)  # lane_ui → verify, same invocation
     published: dict[str, str] = field(default_factory=dict)  # screenshot path → evidence id
     issues: list[passive.Issue] = field(default_factory=list)  # passive lane + traffic checks → verify.record
@@ -134,10 +135,11 @@ async def gate(state: RunState, runtime: Runtime[Deps]) -> dict:
     while i < len(state["case_ids"]):
         tc = d.case(state["case_ids"][i])
         i += 1
-        if tc.risk != "high":
+        production_gate = "requires_approval:production" in d.approval_obligations and bool(tc.side_effects)
+        if tc.risk != "high" and not production_gate:
             approved.append(tc.test_case_id)
             continue
-        ap_id = await pl.open_gate(d.ctx, tc)
+        ap_id = await pl.open_gate(d.ctx, tc, production=production_gate)
         decision: Any = interrupt({"run_id": state["run_id"], "case_id": tc.test_case_id, "approval_id": ap_id})
         ok = bool(decision.get("approve")) if isinstance(decision, dict) else bool(decision)
         await pl.close_gate(d.ctx, tc, ok)

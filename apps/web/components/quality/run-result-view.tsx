@@ -1,11 +1,17 @@
 // All live quality and planning pages read the selected run's persisted API projection.
-import { API_URL, tryApi } from "@/lib/api"
+import { API_URL } from "@/lib/api"
+import { tryServerApi as tryApi } from "@/lib/api-server"
 import { scopedRun } from "@/lib/scope-server"
 import { Card } from "@/components/kit/card"
 import { PageHeader } from "@/components/kit/page-header"
 import { Empty, PageLoading } from "@/components/kit/page-loading"
 import { FlowMap } from "@/components/charts/flow-map"
 import { UiRunResult, type UiRunData } from "./ui-run-result"
+import { PerfRunResult, type PerfRunData } from "./perf-run-result"
+import { SecurityRunResult, type SecurityRunData } from "./security-run-result"
+import { CompatRunResult, type CompatRunData } from "./compat-run-result"
+import { ApiRunResult, type ApiRunData } from "./api-run-result"
+import { PreRunProject, type QualityKind } from "./pre-run-project"
 
 type RecordValue = Record<string, unknown>
 type RunViewData = RecordValue & { run: { id: string; display_id: string; name: string; state: string } }
@@ -13,8 +19,8 @@ type Graph = { nodes: { id: string; label: string; sub: string; k?: "ai" | "det"
   edges: { from: string; to: string; k?: "mut" }[]; w: number; h: number }
 
 const TITLES: Record<string, string> = {
-  plan: "Test plan", planner: "AI test planner", ui: "Browser & UI testing", "api-calls": "API & integration testing",
-  perf: "Performance testing", security: "Security testing", environment: "Compatibility",
+  plan: "Test plan", planner: "AI test planner", ui: "Browser & UI", "api-calls": "API & integration",
+  perf: "Performance", security: "Security", environment: "Compatibility",
   repairs: "Repair assistant", regression: "Regression suite", policy: "Policies", usage: "Run usage",
 }
 const DIAGRAMS: Record<string, string[]> = {
@@ -109,7 +115,9 @@ function Highlights({ kind, data }: { kind: string; data: RunViewData }) {
 export async function LiveRunResult({ kind }: { kind: keyof typeof TITLES }) {
   const title = TITLES[kind]
   const run = await scopedRun()
-  if (!run) return <><PageHeader eyebrow="Live data" title={title} /><Card title="No run selected"><Empty what="No run yet" why="Start a run or choose a project with runs in the top bar." /></Card></>
+  if (!run) return (["ui", "api-calls", "perf", "security", "environment"] as string[]).includes(kind)
+    ? <PreRunProject kind={kind as QualityKind} />
+    : <><PageHeader eyebrow="Live data" title={title} /><Card title="No run selected"><Empty what="No run yet" why="Start a run or choose a project with runs in the top bar." /></Card></>
   const encoded = encodeURIComponent(run)
   const [data, ...graphs] = await Promise.all([
     tryApi<RunViewData>(`/api/runs/${encoded}/${kind}`),
@@ -117,6 +125,10 @@ export async function LiveRunResult({ kind }: { kind: keyof typeof TITLES }) {
   ])
   if (!data) return <PageLoading title={title} error="The run view could not be loaded. Check that the API is running." />
   if (kind === "ui") return <UiRunResult data={data as UiRunData} diagrams={graphs.map((graph, i) => ({ name: label(DIAGRAMS.ui[i]), graph }))} />
+  if (kind === "perf") return <PerfRunResult data={data as PerfRunData} diagrams={graphs.map((graph, i) => ({ name: label(DIAGRAMS.perf[i]), graph }))} />
+  if (kind === "security") return <SecurityRunResult data={data as SecurityRunData} diagrams={graphs.map((graph, i) => ({ name: label(DIAGRAMS.security[i]), graph }))} />
+  if (kind === "environment") return <CompatRunResult data={data as CompatRunData} diagrams={graphs.map((graph, i) => ({ name: label(DIAGRAMS.environment[i]), graph }))} />
+  if (kind === "api-calls") return <ApiRunResult data={data as ApiRunData} diagrams={graphs.map((graph, i) => ({ name: label(DIAGRAMS["api-calls"][i]), graph }))} />
   const sections = Object.entries(data).filter(([key]) => !["run", "reason"].includes(key))
   return <div className="grid gap-3.5">
     <PageHeader eyebrow="Live run" title={title} sub={`${data.run.display_id} · ${data.run.name} · ${data.run.state}`} />

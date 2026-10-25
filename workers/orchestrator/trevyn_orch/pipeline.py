@@ -62,20 +62,22 @@ class RunCtx(Protocol):
     def cancelled(self) -> bool: ...
 
 
-def gate_title(tc: TestCase) -> str:
-    return f"Run high-impact test {tc.test_case_id}"
+def gate_title(tc: TestCase, production: bool = False) -> str:
+    return (f"Run side-effecting production test {tc.test_case_id}" if production else
+            f"Run high-impact test {tc.test_case_id}")
 
 
 async def start(ctx: RunCtx) -> None:
     await ctx.state("RUNNING")
 
 
-async def open_gate(ctx: RunCtx, tc: TestCase) -> str:
+async def open_gate(ctx: RunCtx, tc: TestCase, *, production: bool = False) -> str:
     """Idempotent: re-entering the gate (as LangGraph does on resume) reuses the approval it already opened."""
-    title = gate_title(tc)
-    ap_id, display, created = await ctx.open_gate(title, tc.title, "high")
+    title = gate_title(tc, production)
+    reason = f"Production side effects: {tc.title}" if production else tc.title
+    ap_id, display, created = await ctx.open_gate(title, reason, "high")
     if created:
-        await ctx.state("AWAITING_APPROVAL", f"{tc.test_case_id} is high-risk")
+        await ctx.state("AWAITING_APPROVAL", f"{tc.test_case_id} needs production approval" if production else f"{tc.test_case_id} is high-risk")
         await ctx.log("human", "gate", f"{display}: {title} — waiting for approval", "waiting",
                       {"approval_id": ap_id, "display_id": display})
     return ap_id

@@ -1,6 +1,6 @@
 // Server-only getters backed by services/api. Demo fixtures are used only when API mode is disabled.
-import { cacheLife } from "next/cache"
-import { apiEnabled, tryApi, type ApiFindingDetail, type Items } from "./api"
+import { apiEnabled, type ApiFindingDetail, type Items } from "./api"
+import { tryServerApi as tryApi } from "./api-server"
 import { runParam } from "./scope"
 import { getWorkspace as demoWorkspace } from "./data"
 import type { Approval, DashboardSummary, Finding, RunSummary, Workspace } from "./types"
@@ -32,15 +32,11 @@ export async function emptyLiveWorkspace(): Promise<Workspace> {
 
 /** GET /api/findings/{id}, or null for demo / unknown ids */
 async function cachedGetLiveFinding(id: string) {
-  "use cache"
-  cacheLife("seconds")
   return tryApi<ApiFindingDetail>(`/api/findings/${encodeURIComponent(id)}`)
 }
 
 /** Overview: real KPIs, gate, run health and categories from GET /api/dashboard/overview; null when the API is off */
 async function cachedGetLiveOverview(run: string | null): Promise<Pick<DashboardSummary, "kpis" | "gate" | "runHealth" | "categories"> | null> {
-  "use cache"
-  cacheLife("seconds")
   return tryApi(`/api/dashboard/overview${runParam(run)}`)
 }
 
@@ -50,8 +46,6 @@ export type ApiPlanSummary = {
 }
 /** Plans list from GET /api/plans; null when the API is off or unreachable */
 async function cachedGetLivePlans() {
-  "use cache"
-  cacheLife("seconds")
   return tryApi<Items<ApiPlanSummary>>("/api/plans")
 }
 
@@ -73,8 +67,6 @@ export type LiveAnalytics = {
   diagnoses: { total: number; ai: number }
 }
 async function cachedGetLiveAnalytics(run: string | null) {
-  "use cache"
-  cacheLife("seconds")
   return tryApi<LiveAnalytics>(`/api/insights/analytics${runParam(run)}`)
 }
 /** Analytics from GET /api/insights/analytics (one run when `run` is set); null when the API is off or unreachable */
@@ -93,8 +85,6 @@ export type LiveNetwork = {
   scope?: { run: string; uuid: string; name: string } | null
 }
 async function cachedGetLiveNetwork(run: string | null) {
-  "use cache"
-  cacheLife("seconds")
   return tryApi<LiveNetwork>(`/api/insights/network${runParam(run)}`)
 }
 /** Network from GET /api/insights/network (one run when `run` is set); null when the API is off or unreachable */

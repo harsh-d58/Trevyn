@@ -259,7 +259,11 @@ async def run_case(browser, job: RunnerJob, tc: TestCase, out: Path, device: dic
                 ar.message = "not evaluated: a step before it failed"
             else:
                 if a.kind == "ui_text":
-                    obs = await locate(page, a.subject).first.inner_text(timeout=5000)
+                    locator = locate(page, a.subject).first
+                    # Site-map headings came from DOM textContent. Reading innerText here
+                    # can add line breaks and CSS text-transform, creating a false failure.
+                    obs = (await locator.text_content(timeout=5000) if tc.requirement_ref == "SITEMAP"
+                           else await locator.inner_text(timeout=5000))
                 elif a.kind == "count":
                     obs = await locate(page, a.subject).count()
                 elif a.kind == "url":

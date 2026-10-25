@@ -18,7 +18,7 @@ def allow_private() -> bool:
 def check_url(url: str, resolve=socket.getaddrinfo) -> str | None:
     """None when the target is acceptable, otherwise a message naming the problem."""
     u = urlparse(url)
-    if u.scheme not in ("http", "https") or not u.hostname:
+    if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
         return "Enter a full http(s) URL"
     if allow_private():
         return None
@@ -27,6 +27,8 @@ def check_url(url: str, resolve=socket.getaddrinfo) -> str | None:
     except (socket.gaierror, ValueError):
         return f"Could not resolve {u.hostname}"
     for ip in addrs:
-        if any(ip in n for n in BLOCKED_NETS):
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if not ip.is_global or any(ip in n for n in BLOCKED_NETS):
             return f"{u.hostname} resolves to {ip}, a private or internal address"
     return None

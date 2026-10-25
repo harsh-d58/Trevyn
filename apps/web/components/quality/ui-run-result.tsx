@@ -1,10 +1,9 @@
 import { API_URL } from "@/lib/api"
 import { plainFinding } from "@/lib/findings/plain-language"
-import { Card } from "@/components/kit/card"
 import { PageHeader } from "@/components/kit/page-header"
 import { Pill } from "@/components/kit/pills"
 import { FlowMap } from "@/components/charts/flow-map"
-import { cn } from "@/lib/utils"
+import { ScrollCard } from "./scroll-card"
 
 type Step = { action: string; target?: string; value?: string }
 type Assertion = { kind: string; subject: string; op: string; expected: unknown }
@@ -20,14 +19,6 @@ export type UiRunData = {
 }
 export type UiGraph = { nodes: { id: string; label: string; sub: string; k?: "ai" | "det" | "human" | "bad" | "warn" | "acc" | "mut"; x: number; y: number }[];
   edges: { from: string; to: string; k?: "mut" }[]; w: number; h: number }
-
-function ScrollCard({ title, caption, children, size = "regular", className }: {
-  title: string; caption?: string; children: React.ReactNode; size?: "summary" | "regular" | "diagram"; className?: string
-}) {
-  return <Card title={title} caption={caption} className={cn(size === "summary" ? "h-[210px]" : size === "diagram" ? "h-[440px]" : "h-[360px]", className)}>
-    <div className="min-h-0 flex-1 overflow-auto overscroll-contain pr-1" role="region" aria-label={`${title} content`} tabIndex={0}>{children}</div>
-  </Card>
-}
 
 function pathOf(target?: string): string {
   if (!target) return "the page"
@@ -119,9 +110,9 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
     : `${pageName(casePath(firstFailure))} did not meet one of its expected checks.`) : "No browser check failed in the recorded results."
 
   return <div className="grid gap-3.5">
-    <PageHeader eyebrow="Quality engineering" title="Browser & UI testing" sub={`${data.run.display_id} · ${data.run.name.trim()} · ${data.run.state.replaceAll("_", " ").toLowerCase()}`} />
+    <PageHeader title="Browser & UI" />
 
-    <ScrollCard title="The result" caption="What the browser checks established in this run" size="summary">
+    <ScrollCard title="Result" size="summary">
       <p className="text-[21px] font-semibold tracking-tight">{finished ? `${passed} of ${total} browser checks passed` : "Browser checks have not finished yet"}</p>
       <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-muted-foreground">{failed.length ? failureSummary : finished ? "The recorded browser checks matched their expected results." : "Results will appear as the run records each check."}</p>
       {data.reason && <p className="mt-2 text-[12px] text-muted-foreground">{data.reason}</p>}
@@ -130,16 +121,16 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
         <span><b className="text-foreground">{accessibility.length}</b> accessibility observations</span>
         <span><b className="text-foreground">{errors}</b> browser errors to review</span>
       </div>
-      <p className="mt-2 text-[11.5px] text-muted-foreground">Accessibility and console observations are separate from the {total} planned browser checks.</p>
+      <p className="mt-2 text-[11.5px] text-muted-foreground">Accessibility and console observations are separate from planned checks.</p>
     </ScrollCard>
 
     <div className="grid gap-3.5 xl:grid-cols-2">
-      <ScrollCard title="Needs attention" caption="Checks that did not match the plan">
+      <ScrollCard title="Needs attention">
         {failed.length ? <div className="divide-y divide-border">
           {failed.map((test) => <div key={test.test_case_id} className="py-3 first:pt-0">
             <div className="flex items-center gap-2"><Pill tone="bad">Needs attention</Pill><span className="font-mono text-[11px] text-muted-foreground">{test.test_case_id}</span></div>
             <p className="mt-2 text-[14px] font-semibold">{failedText && test === firstFailure ? "Expected page text was missing" : `${pageName(casePath(test))} did not pass`}</p>
-            <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">{test === firstFailure ? failureSummary : `The recorded result for ${casePath(test)} did not match the test plan.`}</p>
+            {test !== firstFailure && <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">The result for {casePath(test)} did not match the plan.</p>}
             <p className="mt-3 text-[12px] font-semibold">What to check next</p>
             <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{failedCheck(test, assertions.filter((a) => a.case === test.test_case_id))?.kind === "ui_text" ? "Check whether the expected wording changed intentionally. Update the test if it did; otherwise, fix the page content." : "Compare the expected behavior with what the browser recorded, then check whether the page or the test needs changing."}</p>
             <div className="mt-2 flex flex-wrap gap-3 text-[12px] font-semibold text-brand">
@@ -151,7 +142,7 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
         </div> : <p className="text-[13px] text-muted-foreground">{finished ? "No failed browser checks were recorded." : "This section will update when checks finish."}</p>}
       </ScrollCard>
 
-      <ScrollCard title="Pages and journeys" caption={`${cases.length} planned checks · open a row to see what was tested`}>
+      <ScrollCard title={`Pages and journeys · ${cases.length}`}>
         {cases.length ? <div className="divide-y divide-border">
           {cases.map((test) => {
             const status = caseStatus(verdictByCase.get(test.test_case_id))
@@ -171,7 +162,7 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
         </div> : <p className="text-[13px] text-muted-foreground">No planned browser checks were recorded for this run.</p>}
       </ScrollCard>
 
-      <ScrollCard title="Accessibility" caption={`${accessibility.length} observations across ${accessibilityGroups.size} check types; review the affected pages`}>
+      <ScrollCard title={`Accessibility · ${accessibility.length}`}>
         {accessibilityGroups.size ? <div className="divide-y divide-border">
           {[...accessibilityGroups.values()].sort((a, b) => b.count - a.count).map(({ issue, count, paths }) => {
             const plain = plainFinding({ type: "accessibility", title: issue.name })
@@ -185,7 +176,7 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
         </div> : <p className="text-[13px] text-muted-foreground">No accessibility observations were recorded in this run.</p>}
       </ScrollCard>
 
-      <ScrollCard title="Browser messages" caption={`${errors} errors · ${warnings} warnings; these need context before calling them site defects`}>
+      <ScrollCard title={`Browser messages · ${errors} errors, ${warnings} warnings`}>
         {messages.size ? <div className="divide-y divide-border">
           {[...messages.values()].sort((a, b) => b.count - a.count).map((message) => {
             const [headline, explanation] = consoleMeaning(message.type, message.text)
@@ -199,7 +190,7 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
         </div> : <p className="text-[13px] text-muted-foreground">No browser console messages were recorded.</p>}
       </ScrollCard>
 
-      <ScrollCard title="Screenshots" caption={`${screenshots.length} captured views; select one to inspect the page`}>
+      <ScrollCard title={`Screenshots · ${screenshots.length}`}>
         {screenshots.length ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {screenshots.map((shot) => <a key={shot.id} href={API_URL + shot.url} target="_blank" rel="noreferrer" className="glass-inset overflow-hidden rounded-xl hover:outline-2 hover:outline-brand/40">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -209,7 +200,7 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
         </div> : <p className="text-[13px] text-muted-foreground">No screenshots were saved for this run.</p>}
       </ScrollCard>
 
-      <ScrollCard title="Browser recordings" caption={`${traces.length} recorded journeys for technical review`}>
+      <ScrollCard title={`Browser recordings · ${traces.length}`}>
         {traces.length ? <div className="divide-y divide-border">
           {traces.map((trace) => <div key={trace.id} className="flex items-center justify-between gap-3 py-2.5 first:pt-0">
             <span className="font-mono text-[11.5px]">{trace.case}</span><a href={API_URL + trace.url} target="_blank" rel="noreferrer" className="text-[12px] font-semibold text-brand hover:underline">Open recording</a>
@@ -219,8 +210,7 @@ export function UiRunResult({ data, diagrams }: { data: UiRunData; diagrams: { n
     </div>
 
     {diagrams.some(({ graph }) => graph?.nodes.length) && <section aria-label="Run diagrams" className="grid gap-3.5">
-      <div><h2 className="text-[17px] font-semibold">Maps of the run</h2><p className="mt-1 text-[12.5px] text-muted-foreground">These diagrams show coverage and navigation after the written results above.</p></div>
-      {diagrams.map(({ name, graph }) => graph?.nodes.length ? <ScrollCard key={name} title={name} caption="Scroll inside this map to explore every node" size="diagram">
+      {diagrams.map(({ name, graph }) => graph?.nodes.length ? <ScrollCard key={name} title={`${name} map`} size="diagram">
         <FlowMap nodes={graph.nodes} edges={graph.edges} w={graph.w} h={graph.h} label={name} />
       </ScrollCard> : null)}
     </section>}

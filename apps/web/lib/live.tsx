@@ -178,7 +178,7 @@ function createLiveStore(initial: Workspace) {
       const result = await api<Items<RunSummary>>(`/api/runs?limit=1${project ? `&project=${encodeURIComponent(project)}` : ""}`)
       const run = result.items[0]?.uuid ?? null
       writeScopeCookie(run)
-      set(() => ({ project, scope: run }))
+      set(() => ({ project, scope: run, runs: result.items }))
       await store.reload()
     },
     /** UI-lane progress of a real run (workspace event run_progress) */

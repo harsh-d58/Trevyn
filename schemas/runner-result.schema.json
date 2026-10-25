@@ -218,6 +218,19 @@
           ],
           "default": null,
           "title": "Screenshot"
+        },
+        "navigation": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Navigation"
         }
       },
       "required": [
@@ -279,6 +292,19 @@
       "default": "",
       "title": "Ended At",
       "type": "string"
+    },
+    "environment": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Environment"
     }
   },
   "required": [

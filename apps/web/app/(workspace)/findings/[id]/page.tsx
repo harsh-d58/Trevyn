@@ -5,7 +5,8 @@ import { FindingDetailView } from "@/components/findings/finding-detail-view"
 import { RealFindingView } from "@/components/findings/real-finding-view"
 import { findingIds, getFindingEvidence } from "@/lib/data"
 import { getLiveFinding } from "@/lib/live-data"
-import { apiEnabled, tryApi } from "@/lib/api"
+import { apiEnabled } from "@/lib/api"
+import { tryServerApi as tryApi } from "@/lib/api-server"
 
 export const generateStaticParams = async () => findingIds().map((id) => ({ id }))
 

@@ -12,7 +12,7 @@ for line in (Path(".env").read_text().splitlines() if Path(".env").exists() else
 import asyncio  # noqa: E402
 import json  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
-from datetime import UTC, timedelta  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request  # noqa: E402
@@ -29,6 +29,7 @@ from trevyn_runner.discover import discover  # noqa: E402
 from trevyn_contracts import SiteMap  # noqa: E402
 
 from . import events, auth, diagrams, report, insights, integrations, manifest, plans_ext, policy, repairs, repositories, run_views, runs, storage, targets  # noqa: E402
+from .deployment import require_public_config  # noqa: E402
 from .common import Problem, get_or_404  # noqa: E402
 from .db import (Approval, Environment, Evidence, Finding, ModelCall, Plan, PolicyDecision, Project, Run, SiteMapRecord,  # noqa: E402
                  RunEvent, Session, init_db, now, session)
@@ -50,6 +51,7 @@ async def seed() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    require_public_config()
     await init_db()
     await seed()
     if not runs.redis_url():  # in-process mode: anything unfinished died with the previous process
@@ -89,11 +91,14 @@ class ProjectIn(BaseModel):
     base_url: str
     allowed_domains: list[str] = []
     hook_url: str | None = None
+    is_production: bool = False
     authorised: bool  # user confirms they own or may test the target (Part 13.2)
 
 
-def project_json(p: Project, envs: list[Environment]) -> dict:
+def project_json(p: Project, envs: list[Environment], last_run_at: datetime | None = None) -> dict:
     return {"id": p.id, "name": p.name, "allowed_domains": p.allowed_domains,
+            "last_run_at": (last_run_at if last_run_at.tzinfo else last_run_at.replace(tzinfo=UTC)).isoformat()
+            if last_run_at else None,
             "repository": ({"url": p.repository_url, "ref": p.repository_ref, "sha": p.repository_sha,
                             "checked_at": p.repository_checked_at.isoformat() if p.repository_checked_at else None,
                             "file_map": p.repository_map} if p.repository_url else None),
@@ -102,9 +107,11 @@ def project_json(p: Project, envs: list[Environment]) -> dict:
 
 @app.get("/api/projects")
 async def list_projects(s: AsyncSession = Depends(session)):
+    latest_runs = dict((await s.execute(select(Run.project_id, func.max(Run.started_at)).group_by(Run.project_id))).all())
     out = []
     for p in (await s.scalars(select(Project).order_by(Project.created_at))).all():
-        out.append(project_json(p, (await s.scalars(select(Environment).where(Environment.project_id == p.id))).all()))
+        out.append(project_json(p, (await s.scalars(select(Environment).where(Environment.project_id == p.id))).all(),
+                                latest_runs.get(p.id)))
     return {"items": out}
 
 
@@ -114,12 +121,23 @@ async def create_project(body: ProjectIn, s: AsyncSession = Depends(session)):
         raise Problem(422, "validation_error", "Confirm you own or are authorised to test this target")
     if err := targets.check_url(body.base_url):
         raise Problem(422, "target_blocked", err)
+    if body.hook_url:
+        raise Problem(422, "validation_error", "Remote hook URLs are not supported for public projects")
     host = (urlparse(body.base_url).hostname or "").lower()
-    domains = sorted({host, *[d.lower() for d in body.allowed_domains]})
+    domains = {host}
+    for domain in body.allowed_domains:
+        domain = domain.strip().lower()
+        if not domain or "/" in domain or "*" in domain or ":" in domain:
+            raise Problem(422, "target_blocked", f"Invalid allowed domain: {domain}")
+        if err := targets.check_url(f"https://{domain}"):
+            raise Problem(422, "target_blocked", err)
+        domains.add(domain)
+    domains = sorted(domains)
     p = Project(name=body.name, allowed_domains=domains)
     s.add(p)
     await s.flush()
-    e = Environment(project_id=p.id, name="staging", base_url=body.base_url, hook_url=body.hook_url)
+    e = Environment(project_id=p.id, name="production" if body.is_production else "staging",
+                    base_url=body.base_url, is_production=body.is_production)
     s.add(e)
     await s.commit()
     await runs.audit("user", "project.create", "project", p.id, domains=domains)
@@ -229,14 +247,15 @@ async def create_plan(pid: str, body: PlanIn, s: AsyncSession = Depends(session)
                  s.scalar(select(Environment).where(Environment.project_id == pid)))
     if not env or env.project_id != proj.id:
         raise Problem(404, "not_found", "Environment not found in this project")
-    if not env.hook_url and body.mode not in ("black_box", "gray_box"):
+    has_local_hook = env.local_runner and bool(env.hook_url)
+    if not has_local_hook and body.mode not in ("black_box", "gray_box"):
         raise Problem(422, "validation_error", "Live URL projects support black-box or gray-box planning")
     if body.mode == "gray_box" and not proj.repository_sha:
         raise Problem(422, "validation_error", "Connect a public GitHub repository before gray-box planning")
-    snapshot = await site_snapshot(s, proj, env) if not env.hook_url else None
+    snapshot = await site_snapshot(s, proj, env) if not has_local_hook else None
     site_map = SiteMap.model_validate(snapshot.content) if snapshot else None
     draft, usages, source = await planner.generate(body.requirement, env.base_url, proj.allowed_domains, body.mode,
-                                                    site_map=site_map, has_hook=bool(env.hook_url),
+                                                    site_map=site_map, has_hook=has_local_hook,
                                                     repository_map=proj.repository_map if body.mode == "gray_box" else None)
     for u in usages:
         await runs.record_model(u, None)

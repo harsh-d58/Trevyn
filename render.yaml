@@ -1,0 +1,60 @@
+envVarGroups:
+  - name: trevyn-shared
+    envVars:
+      - key: TREVYN_PUBLIC_DEPLOY
+        value: "1"
+      - key: AUTH_MODE
+        value: supabase
+      - key: DB_POOL_SIZE
+        value: "2"
+      - key: DB_MAX_OVERFLOW
+        value: "0"
+
+services:
+  - type: keyvalue
+    name: trevyn-queue
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: trevyn-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /readyz
+    preDeployCommand: alembic upgrade head
+    envVars:
+      - fromGroup: trevyn-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: trevyn-queue
+          property: connectionString
+
+  - type: worker
+    name: trevyn-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: celery -A trevyn_api.worker worker -Q orchestrator,maintenance --pool=solo --loglevel=info
+    envVars:
+      - fromGroup: trevyn-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: trevyn-queue
+          property: connectionString
+
+  - type: worker
+    name: trevyn-beat
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: celery -A trevyn_api.worker beat --loglevel=info
+    envVars:
+      - fromGroup: trevyn-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: trevyn-queue
+          property: connectionString

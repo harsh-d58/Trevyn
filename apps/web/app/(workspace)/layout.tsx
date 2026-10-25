@@ -1,5 +1,4 @@
 import { Suspense } from "react"
-import { Copilot } from "@/components/shell/copilot"
 import { Shell } from "@/components/shell/shell"
 import { getWorkspace as getDemoWorkspace } from "@/lib/data"
 import { apiEnabled } from "@/lib/api"
@@ -12,7 +11,6 @@ function Frame({ workspace, children }: { workspace: Workspace; children: React.
   return (
     <LiveProvider initial={workspace}>
       <Shell>{children}</Shell>
-      <Copilot source={workspace.source ?? "demo"} />
     </LiveProvider>
   )
 }
